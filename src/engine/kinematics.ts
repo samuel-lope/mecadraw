@@ -1,0 +1,406 @@
+import { Joint, MechanismAnalysis, Part, Point2D, TelemetrySample } from '../types/mechanism';
+import { distance2D, pivotWorldPos, rotate2D } from './geometry';
+
+export interface SimParticle {
+  x: number;
+  y: number;
+  fixed: boolean;
+  slider?: {
+    origin: Point2D;
+    dir: Point2D;
+    normal: Point2D;
+  };
+}
+
+export interface SimMotor {
+  center: Point2D;
+  targetId: number;
+  radius: number;
+  initialAngle: number;
+  rpm: number;
+  dir: 1 | -1;
+}
+
+export interface DistanceConstraint {
+  p1: number;
+  p2: number;
+  length: number;
+}
+
+export interface SimulationInstance {
+  particles: Record<number, SimParticle>;
+  distanceConstraints: DistanceConstraint[];
+  joints: [number, number][];
+  motors: SimMotor[];
+  time: number;
+  errorResidual: number;
+  lockedUp: boolean;
+}
+
+export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInstance => {
+  const particles: Record<number, SimParticle> = {};
+  const distanceConstraints: DistanceConstraint[] = [];
+  const simJoints: [number, number][] = [];
+  const motors: SimMotor[] = [];
+
+  // 1. Inicializar partículas a partir dos pivôs das peças
+  for (const part of parts) {
+    for (const pivot of part.pivots) {
+      const wpos = pivotWorldPos(part, pivot);
+      const isFixed = Boolean(pivot.fixed || pivot.motor);
+
+      let sliderData: SimParticle['slider'] | undefined;
+      if (pivot.slider && pivot.slider.enabled) {
+        const ang = pivot.slider.angle;
+        sliderData = {
+          origin: { ...wpos },
+          dir: { x: Math.cos(ang), y: Math.sin(ang) },
+          normal: { x: -Math.sin(ang), y: Math.cos(ang) },
+        };
+      }
+
+      particles[pivot.id] = {
+        x: wpos.x,
+        y: wpos.y,
+        fixed: isFixed,
+        slider: sliderData,
+      };
+    }
+
+    // 2. Restrições rígidas entre pivôs do mesmo corpo
+    const pCount = part.pivots.length;
+    for (let i = 0; i < pCount; i++) {
+      for (let j = i + 1; j < pCount; j++) {
+        const pv1 = part.pivots[i];
+        const pv2 = part.pivots[j];
+        const dist = Math.hypot(pv1.lx - pv2.lx, pv1.ly - pv2.ly);
+        distanceConstraints.push({
+          p1: pv1.id,
+          p2: pv2.id,
+          length: dist,
+        });
+      }
+    }
+
+    // 3. Configurar motores
+    const motorPivots = part.pivots.filter(p => p.motor);
+    for (const mPivot of motorPivots) {
+      const otherPivot = part.pivots.find(p => p.id !== mPivot.id);
+      if (otherPivot) {
+        const cPos = pivotWorldPos(part, mPivot);
+        const qPos = pivotWorldPos(part, otherPivot);
+        const r = distance2D(cPos, qPos);
+        const a0 = Math.atan2(qPos.y - cPos.y, qPos.x - cPos.x);
+
+        motors.push({
+          center: { x: cPos.x, y: cPos.y },
+          targetId: otherPivot.id,
+          radius: r,
+          initialAngle: a0,
+          rpm: mPivot.motorRpm ?? 60,
+          dir: mPivot.motorDir ?? 1,
+        });
+      }
+    }
+  }
+
+  // 4. Juntas coincidentes entre peças
+  for (const j of joints) {
+    if (particles[j.p1] && particles[j.p2]) {
+      simJoints.push([j.p1, j.p2]);
+    }
+  }
+
+  return {
+    particles,
+    distanceConstraints,
+    joints: simJoints,
+    motors,
+    time: 0,
+    errorResidual: 0,
+    lockedUp: false,
+  };
+};
+
+export const stepSimulation = (
+  sim: SimulationInstance,
+  parts: Part[],
+  dt: number,
+  globalSpeedRpm: number,
+  globalDir: 1 | -1,
+  trails: Record<number, Point2D[]>,
+  telemetryHistory: Record<number, TelemetrySample[]>
+): void => {
+  sim.time += dt;
+
+  // 1. Atualizar partículas acionadas por motor
+  for (const motor of sim.motors) {
+    const rpm = motor.rpm || globalSpeedRpm;
+    const omega = (rpm * 2 * Math.PI) / 60 * motor.dir * globalDir;
+    const curAngle = motor.initialAngle + omega * sim.time;
+
+    const targetPart = sim.particles[motor.targetId];
+    if (targetPart) {
+      targetPart.x = motor.center.x + motor.radius * Math.cos(curAngle);
+      targetPart.y = motor.center.y + motor.radius * Math.sin(curAngle);
+      targetPart.fixed = true; // Fixa como mestre durante a iteração de relaxação
+    }
+  }
+
+  // 2. Resolução Iterativa de Restrições (Gauss-Seidel PBD)
+  const iterations = 80;
+  let maxResidual = 0;
+
+  for (let it = 0; it < iterations; it++) {
+    maxResidual = 0;
+
+    // A. Restrições de Distância Rígida
+    for (const c of sim.distanceConstraints) {
+      const a = sim.particles[c.p1];
+      const b = sim.particles[c.p2];
+      if (!a || !b) continue;
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 1e-6;
+      const error = dist - c.length;
+      maxResidual = Math.max(maxResidual, Math.abs(error));
+
+      const w1 = a.fixed ? 0 : 1;
+      const w2 = b.fixed ? 0 : 1;
+      const totalWeight = w1 + w2;
+      if (totalWeight === 0) continue;
+
+      const correction = error / (dist * totalWeight);
+      a.x += dx * correction * w1;
+      a.y += dy * correction * w1;
+      b.x -= dx * correction * w2;
+      b.y -= dy * correction * w2;
+    }
+
+    // B. Restrições de Guia Linear (Slider Prismático)
+    for (const pId in sim.particles) {
+      const part = sim.particles[pId];
+      if (part.slider) {
+        // Projeta partícula na linha da guia
+        const dx = part.x - part.slider.origin.x;
+        const dy = part.y - part.slider.origin.y;
+        const perpDist = dx * part.slider.normal.x + dy * part.slider.normal.y;
+        maxResidual = Math.max(maxResidual, Math.abs(perpDist));
+
+        part.x -= perpDist * part.slider.normal.x;
+        part.y -= perpDist * part.slider.normal.y;
+      }
+    }
+
+    // C. Restrições de Juntas Coincidentes (Revolutas)
+    for (const [id1, id2] of sim.joints) {
+      const a = sim.particles[id1];
+      const b = sim.particles[id2];
+      if (!a || !b) continue;
+
+      const jDist = distance2D(a, b);
+      maxResidual = Math.max(maxResidual, jDist);
+
+      if (a.fixed && b.fixed) continue;
+      if (a.fixed) {
+        b.x = a.x;
+        b.y = a.y;
+      } else if (b.fixed) {
+        a.x = b.x;
+        a.y = b.y;
+      } else {
+        const mx = (a.x + b.x) * 0.5;
+        const my = (a.y + b.y) * 0.5;
+        a.x = b.x = mx;
+        a.y = b.y = my;
+      }
+    }
+  }
+
+  sim.errorResidual = maxResidual;
+  sim.lockedUp = maxResidual > 15.0; // Se após 80 iterações o erro for > 15mm, mecanismo travou/singularidade
+
+  // 3. Atualizar pose dos corpos rígidos a partir das partículas relaxadas
+  for (const part of parts) {
+    if (part.pivots.length === 0) continue;
+
+    if (part.pivots.length === 1) {
+      const p = part.pivots[0];
+      const simP = sim.particles[p.id];
+      if (simP) {
+        const [rx, ry] = rotate2D(p.lx, p.ly, part.rot);
+        part.x = simP.x - rx;
+        part.y = simP.y - ry;
+      }
+    } else if (part.pivots.length === 2) {
+      const [pv0, pv1] = part.pivots;
+      const sim0 = sim.particles[pv0.id];
+      const sim1 = sim.particles[pv1.id];
+      if (sim0 && sim1) {
+        const simAng = Math.atan2(sim1.y - sim0.y, sim1.x - sim0.x);
+        const localAng = Math.atan2(pv1.ly - pv0.ly, pv1.lx - pv0.lx);
+        const rot = simAng - localAng;
+        const [rx, ry] = rotate2D(pv0.lx, pv0.ly, rot);
+
+        part.rot = rot;
+        part.x = sim0.x - rx;
+        part.y = sim0.y - ry;
+      }
+    } else {
+      // 3+ pivôs: Pose ótima (Shape Matching / Procrustes 2D)
+      let sumSimX = 0, sumSimY = 0;
+      let sumLocX = 0, sumLocY = 0;
+      const n = part.pivots.length;
+
+      for (const p of part.pivots) {
+        const simP = sim.particles[p.id];
+        sumSimX += simP.x;
+        sumSimY += simP.y;
+        sumLocX += p.lx;
+        sumLocY += p.ly;
+      }
+
+      const cSim = { x: sumSimX / n, y: sumSimY / n };
+      const cLoc = { x: sumLocX / n, y: sumLocY / n };
+
+      let num = 0;
+      let den = 0;
+      for (const p of part.pivots) {
+        const simP = sim.particles[p.id];
+        const lx = p.lx - cLoc.x;
+        const ly = p.ly - cLoc.y;
+        const sx = simP.x - cSim.x;
+        const sy = simP.y - cSim.y;
+
+        num += lx * sy - ly * sx;
+        den += lx * sx + ly * sy;
+      }
+
+      const rot = Math.atan2(num, den);
+      const [rcx, rcy] = rotate2D(cLoc.x, cLoc.y, rot);
+      part.rot = rot;
+      part.x = cSim.x - rcx;
+      part.y = cSim.y - rcy;
+    }
+  }
+
+  // 4. Gravar trajetórias e telemetria para pivôs marcados com trace
+  for (const part of parts) {
+    for (const pivot of part.pivots) {
+      if (!pivot.trace) continue;
+
+      const currentPos = pivotWorldPos(part, pivot);
+      const trail = trails[pivot.id] || (trails[pivot.id] = []);
+      trail.push(currentPos);
+      if (trail.length > 1000) trail.shift();
+
+      const telemetry = telemetryHistory[pivot.id] || (telemetryHistory[pivot.id] = []);
+      const prev = telemetry[telemetry.length - 1];
+
+      let vx = 0, vy = 0, ax = 0, ay = 0;
+      if (prev && dt > 0) {
+        vx = (currentPos.x - prev.x) / dt;
+        vy = (currentPos.y - prev.y) / dt;
+        ax = (vx - prev.vx) / dt;
+        ay = (vy - prev.vy) / dt;
+      }
+
+      telemetry.push({
+        time: sim.time,
+        x: currentPos.x,
+        y: currentPos.y,
+        vx,
+        vy,
+        speed: Math.hypot(vx, vy),
+        ax,
+        ay,
+        accel: Math.hypot(ax, ay),
+      });
+
+      if (telemetry.length > 500) telemetry.shift();
+    }
+  }
+};
+
+export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnalysis => {
+  const groundPivots = parts.flatMap(p => p.pivots).filter(pv => pv.fixed || pv.motor);
+  const hasGround = groundPivots.length > 0;
+  const numLinks = parts.length + (hasGround ? 1 : 0);
+
+  // Contagem de juntas J1 (revolutas e sliders)
+  const numRevolute = joints.length;
+  const numFixedJoints = groundPivots.length;
+  const numSliders = parts.flatMap(p => p.pivots).filter(pv => pv.slider?.enabled).length;
+
+  const J1 = numRevolute + numFixedJoints + numSliders;
+  const J2 = 0; // Juntas de ordem superior
+
+  // Critério de Gruebler-Kutzbach: M = 3(L - 1) - 2*J1 - J2
+  const dof = numLinks > 0 ? 3 * (numLinks - 1) - 2 * J1 - J2 : 0;
+  const hasMotor = parts.some(p => p.pivots.some(v => v.motor));
+
+  // Análise de Grashof se for quadrilátero de 4 barras (4 elos, 4 juntas)
+  let grashofInfo: MechanismAnalysis['grashof'] | undefined;
+  if (parts.length === 3 && joints.length === 2 && groundPivots.length >= 2) {
+    // 3 elos móveis + 1 terra = 4 barras
+    const barLengths = parts.map(p => {
+      if (p.pivots.length >= 2) {
+        return Math.hypot(p.pivots[1].lx - p.pivots[0].lx, p.pivots[1].ly - p.pivots[0].ly);
+      }
+      return p.w;
+    });
+
+    const g1 = pivotWorldPos(parts[0], groundPivots[0]);
+    const g2 = pivotWorldPos(parts[parts.length - 1], groundPivots[1]);
+    const groundLength = distance2D(g1, g2);
+
+    const allLengths: [number, number, number, number] = [
+      barLengths[0] || 50,
+      barLengths[1] || 100,
+      barLengths[2] || 80,
+      groundLength || 100,
+    ];
+
+    const sorted = [...allLengths].sort((a, b) => a - b);
+    const s = sorted[0];
+    const l = sorted[3];
+    const p = sorted[1];
+    const q = sorted[2];
+    const sPlusL = s + l;
+    const pPlusQ = p + q;
+
+    let condition: NonNullable<MechanismAnalysis['grashof']>['condition'] = 'none';
+    if (Math.abs(sPlusL - pPlusQ) < 1.0) {
+      condition = 'change-point';
+    } else if (sPlusL < pPlusQ) {
+      if (Math.abs(s - allLengths[3]) < 1.0) {
+        condition = 'double-crank'; // Terra é o elo menor
+      } else if (Math.abs(s - allLengths[0]) < 1.0 || Math.abs(s - allLengths[2]) < 1.0) {
+        condition = 'crank-rocker'; // Manivela-Balancim
+      } else {
+        condition = 'double-rocker'; // Acoplador é o elo menor
+      }
+    } else {
+      condition = 'triple-rocker'; // Não-Grashof
+    }
+
+    grashofInfo = {
+      isFourBar: true,
+      condition,
+      lengths: allLengths,
+      sPlusL,
+      pPlusQ,
+    };
+  }
+
+  return {
+    links: numLinks,
+    joints1: J1,
+    joints2: J2,
+    dof,
+    grashof: grashofInfo,
+    hasMotor,
+    isOverconstrained: dof < 0,
+  };
+};
