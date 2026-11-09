@@ -173,8 +173,10 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
             </option>
             <option value="fourBar">4-Barras (Crank-Rocker)</option>
             <option value="sliderCrank">Biela-Manivela (Pistão)</option>
+            <option value="quickReturn">Retorno Rápido (Quick-Return)</option>
             <option value="chebyshev">Chebyshev (Linha Reta)</option>
             <option value="pantograph">Pantógrafo</option>
+            <option value="jansenLeg">Theo Jansen (Perna Mecânica)</option>
           </select>
         </div>
 
