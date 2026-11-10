@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Camera,
+  GearData,
+  GearProfileType,
   Joint,
   MechanismAnalysis,
   Part,
@@ -14,6 +16,7 @@ import {
 import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
 import { pivotWorldPos, slotWorldCenter } from '../engine/geometry';
+import { calculateGearRadii, getIdealMeshedPosition } from '../engine/gearGeometry';
 import { syncPartsAndPivots } from '../engine/naming';
 
 export interface MechanismStateSnapshot {
@@ -42,6 +45,7 @@ export const useMechanismStore = () => {
     showDimensions: true,
     showTrails: true,
     trailDuration: 3.0, // 3 segundos de fade-out
+    showGearContacts: true,
     showVectors: false,
   });
 
@@ -384,6 +388,103 @@ export const useMechanismStore = () => {
     [recordSnapshot]
   );
 
+  // Gestão de Engrenagens
+  const addGearPart = useCallback(
+    (x: number, y: number, teeth = 20, module = 4, profile: GearProfileType = 'involute') => {
+      recordSnapshot();
+      const r = calculateGearRadii(teeth, module);
+      const diam = r.addendum * 2;
+      const newPartId = Date.now();
+      const centerPivotId = Date.now() + 1;
+
+      const newGear: Part = {
+        id: newPartId,
+        name: `Engrenagem ${teeth}D`,
+        type: 'gear',
+        x,
+        y,
+        rot: 0,
+        w: diam,
+        h: diam,
+        gear: {
+          teeth,
+          module,
+          profile,
+          pressureAngle: 0.349,
+        },
+        pivots: [
+          {
+            id: centerPivotId,
+            label: '1',
+            lx: 0,
+            ly: 0,
+            fixed: true, // Eixo central fixo ao terra por padrão
+          },
+        ],
+      };
+
+      setParts((prev) => syncPartsAndPivots([...prev, newGear]));
+      setSelection({ partId: newPartId });
+    },
+    [recordSnapshot]
+  );
+
+  const updateGear = useCallback(
+    (partId: number, updater: Partial<GearData> | ((g: GearData) => GearData)) => {
+      recordSnapshot();
+      setParts((prev) =>
+        prev.map((p) => {
+          if (p.id !== partId || !p.gear) return p;
+          const updatedGear = typeof updater === 'function' ? updater(p.gear) : { ...p.gear, ...updater };
+          const r = calculateGearRadii(updatedGear.teeth, updatedGear.module);
+          const diam = r.addendum * 2;
+          return {
+            ...p,
+            gear: updatedGear,
+            w: diam,
+            h: diam,
+            name: `Engrenagem ${updatedGear.teeth}D`,
+          };
+        })
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const connectGears = useCallback(
+    (part1: Part, part2: Part) => {
+      if (part1.id === part2.id || !part1.gear || !part2.gear) return;
+      recordSnapshot();
+
+      const idealPos = getIdealMeshedPosition(part1, part2);
+      const isFixed2 = part2.pivots.some((pv) => pv.fixed && !pv.motor);
+
+      setParts((prev) =>
+        prev.map((p) => {
+          if (p.id === part2.id && !isFixed2) {
+            return { ...p, x: idealPos.x, y: idealPos.y };
+          }
+          return p;
+        })
+      );
+
+      const ratio = part1.gear.teeth / part2.gear.teeth;
+      const newJoint: Joint = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        p1: part1.pivots[0]?.id || 0,
+        p2: part2.pivots[0]?.id || 0,
+        part1Id: part1.id,
+        part2Id: part2.id,
+        gearRatio: ratio,
+        type: 'gear',
+      };
+
+      setJoints((prev) => [...prev, newJoint]);
+      setPendingJointPivot(null);
+    },
+    [recordSnapshot]
+  );
+
   // Toggles Rápidos no Inspetor / Floating Bar
   const togglePivotGround = useCallback(
     (pivotId: number) => {
@@ -712,6 +813,9 @@ export const useMechanismStore = () => {
     updateSlot,
     deleteSlot,
     connectPinToSlot,
+    addGearPart,
+    updateGear,
+    connectGears,
     togglePivotGround,
     togglePivotMotor,
     togglePivotSlider,

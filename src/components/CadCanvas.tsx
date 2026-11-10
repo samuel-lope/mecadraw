@@ -16,6 +16,12 @@ import {
 } from '../engine/geometry';
 import { Part, PartSlot, Pivot, Point2D } from '../types/mechanism';
 import { createBar } from '../engine/presets';
+import {
+  calculateGearContact,
+  calculateGearRadii,
+  generateGearOutline,
+  getIdealMeshedPosition,
+} from '../engine/gearGeometry';
 
 interface CadCanvasProps {
   store: MechanismStore;
@@ -96,6 +102,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     addSlotToPart,
     deleteSlot,
     connectPinToSlot,
+    addGearPart,
+    connectGears,
     pendingJointPivot,
     setPendingJointPivot,
     togglePivotGround,
@@ -345,6 +353,15 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.closePath();
       } else if (p.type === 'bar') {
         ctx.roundRect(-sw / 2, -sh / 2, sw, sh, sh / 2);
+      } else if (p.type === 'gear' && p.gear) {
+        const outline = generateGearOutline(p.gear, { x: 0, y: 0 }, 0);
+        if (outline.length > 0) {
+          ctx.moveTo(outline[0].x * camera.zoom, outline[0].y * camera.zoom);
+          for (let i = 1; i < outline.length; i++) {
+            ctx.lineTo(outline[i].x * camera.zoom, outline[i].y * camera.zoom);
+          }
+          ctx.closePath();
+        }
       } else {
         ctx.roundRect(-sw / 2, -sh / 2, sw, sh, 6);
       }
@@ -362,16 +379,56 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.stroke();
 
+      if (p.type === 'gear' && p.gear) {
+        const radii = calculateGearRadii(p.gear.teeth, p.gear.module);
+        // Circunferência primitiva ISO (tracejada)
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.7)' : 'rgba(2, 132, 199, 0.8)';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, radii.pitch * camera.zoom, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.restore();
+
+        // Furo do cubo central
+        const hubR = Math.max(6, Math.min(16, radii.pitch * 0.25)) * camera.zoom;
+        ctx.beginPath();
+        ctx.arc(0, 0, hubR, 0, 2 * Math.PI);
+        ctx.fillStyle = isDark ? '#0f172a' : '#f8fafc';
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? '#2563eb' : (isDark ? '#475569' : '#94a3b8');
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Texto informativo no corpo da engrenagem
+        if (radii.pitch * camera.zoom > 25) {
+          ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+          ctx.font = 'bold 9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`z=${p.gear.teeth} m=${p.gear.module}`, 0, (radii.dedendum * 0.55) * camera.zoom);
+        }
+      }
+
       // Cotas de Dimensão na peça selecionada
       if (camera.showDimensions && isSelected) {
         ctx.fillStyle = isDark ? '#93c5fd' : '#1d4ed8';
         ctx.font = '11px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(
-          `${Math.round(p.w)} mm × ${(p.rot * (180 / Math.PI)).toFixed(1)}°`,
-          0,
-          -sh / 2 - 8
-        );
+        if (p.type === 'gear' && p.gear) {
+          const radii = calculateGearRadii(p.gear.teeth, p.gear.module);
+          ctx.fillText(
+            `z=${p.gear.teeth} | Dp=${(radii.pitch * 2).toFixed(1)}mm | ${(p.rot * (180 / Math.PI)).toFixed(1)}°`,
+            0,
+            -radii.addendum * camera.zoom - 10
+          );
+        } else {
+          ctx.fillText(
+            `${Math.round(p.w)} mm × ${(p.rot * (180 / Math.PI)).toFixed(1)}°`,
+            0,
+            -sh / 2 - 8
+          );
+        }
       }
 
       ctx.restore();
@@ -581,6 +638,118 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.fillText(badgeText, badgeX + badgeWidth / 2, badgeY + 11);
       }
     });
+
+    // 5.1 Contatos de Engrenamento e Linha de Ação (Linha de Pressão a 20 graus ISO)
+    if (camera.showGearContacts !== false) {
+      const activeGears = parts.filter((p) => !p.hidden && p.type === 'gear' && p.gear);
+      const drawnPairs = new Set<string>();
+
+      for (let i = 0; i < activeGears.length; i++) {
+        for (let j = i + 1; j < activeGears.length; j++) {
+          const g1 = activeGears[i];
+          const g2 = activeGears[j];
+          if (!g1.gear || !g2.gear) continue;
+          const pairKey = `${Math.min(g1.id, g2.id)}-${Math.max(g1.id, g2.id)}`;
+          if (drawnPairs.has(pairKey)) continue;
+
+          const contact = calculateGearContact(g1, g2);
+          if (!contact || !contact.isMeshing) continue;
+          drawnPairs.add(pairKey);
+
+          const sPitch = worldToScreen(contact.pitchPoint, camera, w, h);
+          const sContact = worldToScreen(contact.contactPoint, camera, w, h);
+          const sLoaStart = worldToScreen(contact.lineOfActionStart, camera, w, h);
+          const sLoaEnd = worldToScreen(contact.lineOfActionEnd, camera, w, h);
+
+          ctx.save();
+
+          // 1. Linha de Ação (tracejada em magenta/carmim)
+          ctx.strokeStyle = '#f43f5e';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.moveTo(sLoaStart.x, sLoaStart.y);
+          ctx.lineTo(sLoaEnd.x, sLoaEnd.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // 2. Ponto Primitivo P (Pitch Point - Cruz e anel)
+          ctx.strokeStyle = '#06b6d4';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(sPitch.x, sPitch.y, 4, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(sPitch.x - 6, sPitch.y);
+          ctx.lineTo(sPitch.x + 6, sPitch.y);
+          ctx.moveTo(sPitch.x, sPitch.y - 6);
+          ctx.lineTo(sPitch.x, sPitch.y + 6);
+          ctx.stroke();
+
+          // Rótulo P
+          ctx.font = 'bold 9px monospace';
+          ctx.fillStyle = '#06b6d4';
+          ctx.textAlign = 'left';
+          ctx.fillText('P', sPitch.x + 7, sPitch.y - 4);
+
+          // 3. Ponto Dinâmico de Contato Ativo (Pulsante em esmeralda)
+          ctx.strokeStyle = '#10b981';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(sContact.x, sContact.y, 6, 0, 2 * Math.PI);
+          ctx.stroke();
+
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.4)';
+          ctx.beginPath();
+          ctx.arc(sContact.x, sContact.y, 3.5, 0, 2 * Math.PI);
+          ctx.fill();
+
+          // 4. Vetor de Força Normal Fn (seta ao longo da linha de ação)
+          const arrowLen = 22 * camera.zoom;
+          const fnX = sContact.x + contact.normalVector.x * arrowLen;
+          const fnY = sContact.y + contact.normalVector.y * arrowLen;
+
+          ctx.strokeStyle = '#10b981';
+          ctx.fillStyle = '#10b981';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(sContact.x, sContact.y);
+          ctx.lineTo(fnX, fnY);
+          ctx.stroke();
+
+          // Ponta da seta
+          const headLen = 6;
+          const arrowAngle = Math.atan2(contact.normalVector.y, contact.normalVector.x);
+          ctx.beginPath();
+          ctx.moveTo(fnX, fnY);
+          ctx.lineTo(
+            fnX - headLen * Math.cos(arrowAngle - Math.PI / 6),
+            fnY - headLen * Math.sin(arrowAngle - Math.PI / 6)
+          );
+          ctx.lineTo(
+            fnX - headLen * Math.cos(arrowAngle + Math.PI / 6),
+            fnY - headLen * Math.sin(arrowAngle + Math.PI / 6)
+          );
+          ctx.closePath();
+          ctx.fill();
+
+          // 5. Badge Informativo Flutuante de Engrenamento
+          const badgeText = `Contato: 20° ISO (${g1.gear.teeth}:${g2.gear.teeth})`;
+          ctx.font = 'bold 9px monospace';
+          const bW = ctx.measureText(badgeText).width + 8;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+          ctx.beginPath();
+          ctx.roundRect(sPitch.x - bW / 2, sPitch.y + 10, bW, 14, 3);
+          ctx.fill();
+
+          ctx.fillStyle = '#f43f5e';
+          ctx.textAlign = 'center';
+          ctx.fillText(badgeText, sPitch.x, sPitch.y + 20);
+
+          ctx.restore();
+        }
+      }
+    }
 
     // 6. Eixos / Pivôs (Fixo, Motor, Slider, Rótulos de Identificação)
     parts.filter((p) => !p.hidden).forEach((p) => {
@@ -822,6 +991,15 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       return;
     }
 
+    // Ferramenta 1-Clique: Inserir Engrenagem
+    if (tool === 'gear') {
+      recordSnapshot();
+      const snap = getSnapPoint(worldPt, parts, camera);
+      addGearPart(snap.point.x, snap.point.y, 20, 4, 'involute');
+      setTool('sel');
+      return;
+    }
+
     // Ferramentas de Aplicação Rápida em Eixos:
     const visibleParts = parts.filter((p) => !p.hidden);
     const clickedPivot = hitPivot(worldPt, visibleParts, camera);
@@ -881,12 +1059,31 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         if (!pendingJointPivot) {
           setPendingJointPivot(clickedPivot);
         } else {
-          connectJoint(pendingJointPivot, clickedPivot);
+          if (
+            pendingJointPivot.part.type === 'gear' &&
+            clickedPivot.part.type === 'gear' &&
+            pendingJointPivot.part.id !== clickedPivot.part.id
+          ) {
+            connectGears(pendingJointPivot.part, clickedPivot.part);
+          } else {
+            connectJoint(pendingJointPivot, clickedPivot);
+          }
           setPendingJointPivot(null);
         }
       } else if (clickedSlot && pendingJointPivot) {
         connectPinToSlot(pendingJointPivot, clickedSlot);
         setPendingJointPivot(null);
+      } else if (clickedPart && clickedPart.type === 'gear') {
+        if (
+          pendingJointPivot &&
+          pendingJointPivot.part.type === 'gear' &&
+          pendingJointPivot.part.id !== clickedPart.id
+        ) {
+          connectGears(pendingJointPivot.part, clickedPart);
+          setPendingJointPivot(null);
+        } else if (clickedPart.pivots[0]) {
+          setPendingJointPivot({ part: clickedPart, pivot: clickedPart.pivots[0] });
+        }
       }
       return;
     }
@@ -1152,6 +1349,26 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       if (camera.snapToGrid) {
         newX = Math.round(newX / camera.gridSize) * camera.gridSize;
         newY = Math.round(newY / camera.gridSize) * camera.gridSize;
+      }
+
+      // Auto-snap magnético para engrenagens
+      if (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
+        const otherGears = parts.filter(
+          (op) => op.id !== dragState.targetPart!.id && op.type === 'gear' && op.gear && !op.hidden
+        );
+        for (const og of otherGears) {
+          const testPart: Part = { ...dragState.targetPart, x: newX, y: newY };
+          const contact = calculateGearContact(og, testPart);
+          if (contact) {
+            const idealPos = getIdealMeshedPosition(og, testPart);
+            const distToIdeal = Math.hypot(newX - idealPos.x, newY - idealPos.y);
+            if (distToIdeal < 18) {
+              newX = idealPos.x;
+              newY = idealPos.y;
+              break;
+            }
+          }
+        }
       }
 
       updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY }));

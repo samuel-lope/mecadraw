@@ -291,6 +291,106 @@ export const PRESETS: Record<string, () => PresetData> = {
     };
   },
 
+  gearTrain: () => {
+    // Trem de engrenagens de 3 estágios (Transmissão de Potência / Redutor)
+    const m = 4;
+    const z1 = 16;
+    const z2 = 24;
+    const z3 = 32;
+
+    const r1 = (m * z1) / 2;
+    const r2 = (m * z2) / 2;
+    const r3 = (m * z3) / 2;
+
+    const x1 = -96;
+    const y1 = 0;
+    const x2 = x1 + r1 + r2;
+    const y2 = 0;
+    const x3 = x2 + r2 + r3;
+    const y3 = 0;
+
+    const g1Id = ++nextId;
+    const p1Id = ++nextId;
+    const gear1: Part = {
+      id: g1Id,
+      name: 'Engrenagem Motora (Z=16)',
+      type: 'gear',
+      x: x1,
+      y: y1,
+      rot: 0,
+      w: (r1 + m) * 2,
+      h: (r1 + m) * 2,
+      gear: { teeth: z1, module: m, profile: 'involute', pressureAngle: 20 * (Math.PI / 180) },
+      pivots: [
+        { id: p1Id, label: 'G1', lx: 0, ly: 0, fixed: true, motor: true },
+      ],
+    };
+
+    const g2Id = ++nextId;
+    const p2Id = ++nextId;
+    const gear2: Part = {
+      id: g2Id,
+      name: 'Engrenagem Intermediária (Z=24)',
+      type: 'gear',
+      x: x2,
+      y: y2,
+      rot: Math.PI / z2,
+      w: (r2 + m) * 2,
+      h: (r2 + m) * 2,
+      gear: { teeth: z2, module: m, profile: 'involute', pressureAngle: 20 * (Math.PI / 180) },
+      pivots: [
+        { id: p2Id, label: 'G2', lx: 0, ly: 0, fixed: true },
+      ],
+    };
+
+    const g3Id = ++nextId;
+    const p3Id = ++nextId;
+    const tracePivId = ++nextId;
+    const gear3: Part = {
+      id: g3Id,
+      name: 'Engrenagem Movida (Z=32)',
+      type: 'gear',
+      x: x3,
+      y: y3,
+      rot: 0,
+      w: (r3 + m) * 2,
+      h: (r3 + m) * 2,
+      gear: { teeth: z3, module: m, profile: 'involute', pressureAngle: 20 * (Math.PI / 180) },
+      pivots: [
+        { id: p3Id, label: 'G3', lx: 0, ly: 0, fixed: true },
+        { id: tracePivId, label: 'T1', lx: r3 * 0.75, ly: 0, trace: true, traceColor: '#10b981' },
+      ],
+    };
+
+    const joints: Joint[] = [
+      {
+        id: ++nextId,
+        type: 'gear',
+        p1: p1Id,
+        p2: p2Id,
+        part1Id: g1Id,
+        part2Id: g2Id,
+        gearRatio: z1 / z2,
+      },
+      {
+        id: ++nextId,
+        type: 'gear',
+        p1: p2Id,
+        p2: p3Id,
+        part1Id: g2Id,
+        part2Id: g3Id,
+        gearRatio: z2 / z3,
+      },
+    ];
+
+    return {
+      name: 'Trem de Engrenagens (3 Estágios)',
+      description: 'Trem de engrenagens cilíndricas com transmissão de torque, inversão de rotação e cálculo de linha de ação a 20° ISO.',
+      parts: syncPartsAndPivots([gear1, gear2, gear3]),
+      joints,
+    };
+  },
+
   jansenLeg: () => {
     // Perna de Theo Jansen (Mecanismo de Marcha / Strandbeest)
     const O = { x: 0, y: 0 };

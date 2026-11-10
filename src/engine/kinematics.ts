@@ -42,11 +42,19 @@ export interface SimPinInSlot {
   slot: PartSlot;
 }
 
+export interface SimGear {
+  part1Id: number;
+  part2Id: number;
+  ratio: number; // z1 / z2
+  initialDiff: number; // diferenca angular de fase
+}
+
 export interface SimulationInstance {
   particles: Record<number, SimParticle>;
   distanceConstraints: DistanceConstraint[];
   joints: [number, number][];
   pinInSlots: SimPinInSlot[];
+  gears: SimGear[];
   motors: SimMotor[];
   time: number;
   errorResidual: number;
@@ -58,6 +66,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
   const distanceConstraints: DistanceConstraint[] = [];
   const simJoints: [number, number][] = [];
   const simPinInSlots: SimPinInSlot[] = [];
+  const simGears: SimGear[] = [];
   const motors: SimMotor[] = [];
 
   // 1. Inicializar partículas a partir dos pivôs das peças
@@ -121,7 +130,9 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     }
   }
 
-  // 4. Juntas coincidentes entre peças ou juntas pino-em-fenda
+  // 4. Juntas coincidentes entre peças, pino-em-fenda ou engrenamento
+  const pairedGears = new Set<string>();
+
   for (const j of joints) {
     if (j.type === 'pin-in-slot' && j.slotId !== undefined) {
       const partWithSlot = parts.find((p) => p.slots?.some((s) => s.id === j.slotId));
@@ -134,8 +145,41 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
           slot,
         });
       }
+    } else if (j.type === 'gear' && j.part1Id && j.part2Id) {
+      const g1 = parts.find((p) => p.id === j.part1Id);
+      const g2 = parts.find((p) => p.id === j.part2Id);
+      if (g1?.gear && g2?.gear) {
+        const key = [g1.id, g2.id].sort().join('-');
+        pairedGears.add(key);
+        const ratio = g1.gear.teeth / g2.gear.teeth;
+        const initialDiff = g2.rot - (-ratio * g1.rot);
+        simGears.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
+      }
     } else if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
       simJoints.push([j.p1, j.p2]);
+    }
+  }
+
+  // 5. Engrenagens geometricamente acopladas por proximidade
+  const gearParts = parts.filter((p) => p.type === 'gear' && p.gear);
+  for (let i = 0; i < gearParts.length; i++) {
+    for (let k = i + 1; k < gearParts.length; k++) {
+      const g1 = gearParts[i];
+      const g2 = gearParts[k];
+      const key = [g1.id, g2.id].sort().join('-');
+      if (pairedGears.has(key)) continue;
+
+      const d = Math.hypot(g2.x - g1.x, g2.y - g1.y);
+      const rp1 = ((g1.gear!.module) * g1.gear!.teeth) / 2;
+      const rp2 = ((g2.gear!.module) * g2.gear!.teeth) / 2;
+      const idealDist = rp1 + rp2;
+
+      if (Math.abs(d - idealDist) <= Math.max(10, g1.gear!.module * 1.8)) {
+        pairedGears.add(key);
+        const ratio = g1.gear!.teeth / g2.gear!.teeth;
+        const initialDiff = g2.rot - (-ratio * g1.rot);
+        simGears.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
+      }
     }
   }
 
@@ -144,6 +188,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     distanceConstraints,
     joints: simJoints,
     pinInSlots: simPinInSlots,
+    gears: simGears,
     motors,
     time: 0,
     errorResidual: 0,
@@ -199,6 +244,16 @@ export const stepSimulation = (
       targetPart.x = motor.center.x + motor.radius * Math.cos(motor.currentAngle);
       targetPart.y = motor.center.y + motor.radius * Math.sin(motor.currentAngle);
       targetPart.fixed = true; // Fixa como mestre durante a iteração de relaxação
+    }
+  }
+
+  // 1.1 Atualizar rotação angular direta para peças de 1 pivô com motor (ex: Engrenagens motoras)
+  for (const part of parts) {
+    if (part.pivots.length === 1 && part.pivots[0].motor) {
+      const mPivot = part.pivots[0];
+      const rpm = mPivot.motorRpm && mPivot.motorRpm > 0 ? mPivot.motorRpm : globalSpeedRpm;
+      const omega = ((rpm * 2 * Math.PI) / 60) * (mPivot.motorDir ?? 1) * globalDir;
+      part.rot += omega * dt;
     }
   }
 
@@ -359,6 +414,46 @@ export const stepSimulation = (
         }
       }
     }
+
+    // E. Restrições de Transmissão por Engrenamento (Gears)
+    for (const g of sim.gears) {
+      const p1 = parts.find((p) => p.id === g.part1Id);
+      const p2 = parts.find((p) => p.id === g.part2Id);
+      if (!p1 || !p2) continue;
+
+      const desiredRot2 = -g.ratio * p1.rot + g.initialDiff;
+      let rotErr = p2.rot - desiredRot2;
+      rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
+
+      const equivLinearErr = Math.abs(rotErr) * ((p2.gear?.module || 4) * (p2.gear?.teeth || 20) * 0.5);
+      maxResidual = Math.max(maxResidual, equivLinearErr);
+
+      const p1Motor = p1.pivots.some((pv) => pv.motor);
+      const p2Motor = p2.pivots.some((pv) => pv.motor);
+
+      if (p1Motor && !p2Motor) {
+        p2.rot -= rotErr;
+      } else if (!p1Motor && p2Motor) {
+        p1.rot += rotErr / g.ratio;
+      } else {
+        p2.rot -= rotErr * 0.5;
+        p1.rot += (rotErr / g.ratio) * 0.5;
+      }
+
+      // Sincronizar partículas dos pivôs excêntricos das engrenagens (se houver)
+      for (const p of [p1, p2]) {
+        if (p.pivots.length > 1) {
+          p.pivots.forEach((pv) => {
+            const sp = sim.particles[pv.id];
+            if (sp && !sp.fixed) {
+              const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
+              sp.x = p.x + rx;
+              sp.y = p.y + ry;
+            }
+          });
+        }
+      }
+    }
   }
 
   sim.errorResidual = maxResidual;
@@ -480,13 +575,14 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
   const hasGround = groundPivots.length > 0;
   const numLinks = parts.length + (hasGround ? 1 : 0);
 
-  // Contagem de juntas J1 (revolutas, fixas e sliders) e J2 (pino em fenda)
-  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot').length;
+  // Contagem de juntas J1 (revolutas, fixas, sliders e engrenagens) e J2 (pino em fenda)
+  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot' && j.type !== 'gear').length;
   const numPinInSlots = joints.filter((j) => j.type === 'pin-in-slot').length;
+  const numGearJoints = joints.filter((j) => j.type === 'gear').length;
   const numFixedJoints = groundPivots.length;
   const numSliders = parts.flatMap((p) => p.pivots).filter((pv) => pv.slider?.enabled).length;
 
-  const J1 = numRevolute + numFixedJoints + numSliders;
+  const J1 = numRevolute + numFixedJoints + numSliders + numGearJoints;
   const J2 = numPinInSlots; // Fenda permite rotação e translação (2 graus de liberdade relativos)
 
   // Critério de Gruebler-Kutzbach: M = 3(L - 1) - 2*J1 - J2

@@ -41,7 +41,16 @@ export interface Pivot {
   slider?: SliderGuide; // Junta prismática (guia linear)
 }
 
-export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon';
+export type GearProfileType = 'involute' | 'trapezoidal' | 'cycloidal';
+
+export interface GearData {
+  teeth: number; // Número de dentes z (ex: 20)
+  module: number; // Módulo métrico m em mm (ex: 4 mm)
+  pressureAngle?: number; // Ângulo de pressão em radianos (padrão 20° = 0.349 rad)
+  profile?: GearProfileType; // 'involute' | 'trapezoidal' | 'cycloidal'
+}
+
+export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon' | 'gear';
 
 export interface Part {
   id: number;
@@ -55,6 +64,7 @@ export interface Part {
   h: number; // Altura ou espessura (mm)
   pivots: Pivot[];
   slots?: PartSlot[]; // Fendas internas mecânicas por onde eixos correm
+  gear?: GearData; // Dados paramétricos se type === 'gear'
   color?: string;
   locked?: boolean;
   hidden?: boolean; // Peça e eixos ocultos visualmente (mantém cálculo cinemático)
@@ -65,7 +75,10 @@ export interface Joint {
   p1: number; // ID do pivô A
   p2?: number; // ID do pivô B (se revoluta)
   slotId?: number; // ID da fenda (se pino-em-fenda)
-  type?: 'revolute' | 'weld' | 'pin-in-slot';
+  part1Id?: number; // ID da peça 1 (se engrenamento)
+  part2Id?: number; // ID da peça 2 (se engrenamento)
+  gearRatio?: number; // Relação de transmissão z1 / z2 (se engrenamento)
+  type?: 'revolute' | 'weld' | 'pin-in-slot' | 'gear';
 }
 
 export type ToolType =
@@ -74,6 +87,7 @@ export type ToolType =
   | 'rect'
   | 'circle'
   | 'tri'
+  | 'gear'
   | 'axis'
   | 'slot'
   | 'joint'
@@ -93,6 +107,7 @@ export interface Camera {
   showDimensions: boolean;
   showTrails: boolean;
   trailDuration: number; // Duração global do rastro em segundos (padrão 3.0s, 0 = infinito)
+  showGearContacts: boolean; // Visualização dos pontos de contato e linha de ação das engrenagens
   showVectors: boolean;
 }
 

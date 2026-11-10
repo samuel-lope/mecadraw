@@ -15,6 +15,7 @@ import {
   Cog,
   MoveHorizontal,
   PenTool,
+  Settings,
 } from 'lucide-react';
 
 interface ToolPaletteProps {
@@ -35,6 +36,7 @@ const TOOLS: ToolDef[] = [
   { id: 'rect', label: 'Retângulo', icon: <Square className="w-4 h-4" />, shortcut: 'R' },
   { id: 'circle', label: 'Círculo', icon: <Circle className="w-4 h-4" />, shortcut: 'C' },
   { id: 'tri', label: 'Triângulo', icon: <Triangle className="w-4 h-4" />, shortcut: 'T' },
+  { id: 'gear', label: 'Engrenagem', icon: <Settings className="w-4 h-4" />, shortcut: 'E' },
   { id: 'axis', label: '+ Eixo', icon: <PlusCircle className="w-4 h-4" />, shortcut: 'A' },
   { id: 'slot', label: '+ Fenda', icon: <RectangleHorizontal className="w-4 h-4" />, shortcut: 'F' },
   { id: 'joint', label: 'Junta', icon: <Link2 className="w-4 h-4" />, shortcut: 'J' },
@@ -55,7 +57,7 @@ export const ToolPalette: React.FC<ToolPaletteProps> = ({ store }) => {
 
         return (
           <React.Fragment key={t.id}>
-            {idx === 7 && <div className="w-8 h-px bg-slate-200 dark:bg-slate-800 my-1" />}
+            {idx === 8 && <div className="w-8 h-px bg-slate-200 dark:bg-slate-800 my-1" />}
             <button
               onClick={() => setTool(t.id)}
               className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-all text-xs relative ${

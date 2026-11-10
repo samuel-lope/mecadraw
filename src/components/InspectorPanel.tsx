@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { MechanismStore } from '../state/useMechanismStore';
 import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff } from 'lucide-react';
+import { calculateGearRadii } from '../engine/gearGeometry';
 
 interface InspectorPanelProps {
   store: MechanismStore;
@@ -21,6 +22,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     updateSlot,
     deleteSlot,
     connectPinToSlot,
+    updateGear,
+    camera,
+    setCamera,
     togglePivotGround,
     togglePivotMotor,
     togglePivotSlider,
@@ -200,87 +204,184 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
       {/* Dimensões Geométricas */}
       <div className="flex flex-col gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
         <h4 className="font-semibold text-slate-900 dark:text-slate-100 text-[11px] uppercase tracking-wider">
-          Geometria da Peça
+          {selPart.type === 'gear' ? 'Geometria da Engrenagem' : 'Geometria da Peça'}
         </h4>
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-slate-500">
-              {selPart.type === 'circle'
-                ? 'Diâmetro (mm)'
-                : selPart.type === 'bar'
-                ? 'Entre Eixos L (mm)'
-                : 'Comprimento (mm)'}
-            </span>
-            <input
-              type="number"
-              step="1"
-              value={
-                selPart.type === 'bar' && selPart.pivots.length >= 2
-                  ? Math.round(
-                      Math.hypot(
-                        selPart.pivots[1].lx - selPart.pivots[0].lx,
-                        selPart.pivots[1].ly - selPart.pivots[0].ly
-                      ) * 10
-                    ) / 10
-                  : Math.round(selPart.w * 10) / 10
-              }
-              onChange={(e) => {
-                const val = Math.max(10, parseFloat(e.target.value) || 10);
-                updatePart(selPart.id, (p) => {
-                  if (p.type === 'bar' && p.pivots.length >= 2) {
-                    const newL = val;
-                    const newW = newL + p.h;
-                    return {
-                      ...p,
-                      w: newW,
-                      pivots: p.pivots.map((pv, idx) => {
-                        if (idx === 0) return { ...pv, lx: -newL / 2, ly: 0 };
-                        if (idx === 1) return { ...pv, lx: newL / 2, ly: 0 };
-                        return pv;
-                      }),
-                    };
-                  }
-                  const factor = val / p.w;
-                  return {
-                    ...p,
-                    w: val,
-                    h: p.type === 'circle' ? val : p.h,
-                    pivots: p.pivots.map((pv) => ({ ...pv, lx: pv.lx * factor })),
-                  };
-                });
-              }}
-              className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
-            />
-          </label>
+        {selPart.type === 'gear' && selPart.gear ? (
+          <div className="flex flex-col gap-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-slate-500 font-medium">Nº de Dentes (z)</span>
+                <input
+                  type="number"
+                  min="6"
+                  max="120"
+                  step="1"
+                  value={selPart.gear.teeth}
+                  onChange={(e) => {
+                    const z = Math.max(6, parseInt(e.target.value) || 6);
+                    updateGear(selPart.id, { teeth: z });
+                  }}
+                  className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+                />
+              </label>
 
-          {selPart.type !== 'circle' && (
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-slate-500 font-medium">Módulo m (mm)</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="30"
+                  step="0.5"
+                  value={selPart.gear.module}
+                  onChange={(e) => {
+                    const m = Math.max(1, parseFloat(e.target.value) || 1);
+                    updateGear(selPart.id, { module: m });
+                  }}
+                  className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 col-span-2">
+                <span className="text-[10px] text-slate-500 font-medium">Perfil do Dente</span>
+                <select
+                  value={selPart.gear.profile || 'involute'}
+                  onChange={(e) => {
+                    updateGear(selPart.id, {
+                      profile: e.target.value as 'involute' | 'trapezoidal' | 'cycloidal',
+                    });
+                  }}
+                  className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none cursor-pointer"
+                >
+                  <option value="involute">Evolvente de Círculo (ISO DIN 867)</option>
+                  <option value="cycloidal">Cicloidal (Ogival / Fina)</option>
+                  <option value="trapezoidal">Trapezoidal / Dentes Retos</option>
+                </select>
+              </label>
+            </div>
+
+            {/* Dados Técnicos Calculados da Engrenagem */}
+            {(() => {
+              const radii = calculateGearRadii(selPart.gear.teeth, selPart.gear.module);
+              return (
+                <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-md border border-slate-200 dark:border-slate-700/60 flex flex-col gap-1 text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Diâm. Primitivo (Dp):</span>
+                    <span className="font-semibold text-blue-600 dark:text-blue-400">
+                      {(radii.pitch * 2).toFixed(1)} mm
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Diâm. Externo (Da):</span>
+                    <span>{(radii.addendum * 2).toFixed(1)} mm</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Diâm. Raiz (Df):</span>
+                    <span>{(radii.dedendum * 2).toFixed(1)} mm</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Passo Circular (p):</span>
+                    <span>{radii.circularPitch.toFixed(2)} mm</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Toggle de Contatos de Engrenagem */}
+            <label className="flex items-center justify-between py-1 px-1 cursor-pointer">
+              <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+                Linha de Ação e Contatos
+              </span>
+              <input
+                type="checkbox"
+                checked={camera.showGearContacts !== false}
+                onChange={(e) => setCamera((c) => ({ ...c, showGearContacts: e.target.checked }))}
+                className="accent-blue-600 rounded"
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1">
               <span className="text-[10px] text-slate-500">
-                {selPart.type === 'bar' ? 'Espessura h (mm)' : 'Largura (mm)'}
+                {selPart.type === 'circle'
+                  ? 'Diâmetro (mm)'
+                  : selPart.type === 'bar'
+                  ? 'Entre Eixos L (mm)'
+                  : 'Comprimento (mm)'}
               </span>
               <input
                 type="number"
                 step="1"
-                value={Math.round(selPart.h * 10) / 10}
+                value={
+                  selPart.type === 'bar' && selPart.pivots.length >= 2
+                    ? Math.round(
+                        Math.hypot(
+                          selPart.pivots[1].lx - selPart.pivots[0].lx,
+                          selPart.pivots[1].ly - selPart.pivots[0].ly
+                        ) * 10
+                      ) / 10
+                    : Math.round(selPart.w * 10) / 10
+                }
                 onChange={(e) => {
-                  const val = Math.max(8, parseFloat(e.target.value) || 8);
+                  const val = Math.max(10, parseFloat(e.target.value) || 10);
                   updatePart(selPart.id, (p) => {
                     if (p.type === 'bar' && p.pivots.length >= 2) {
-                      const L = Math.hypot(
-                        p.pivots[1].lx - p.pivots[0].lx,
-                        p.pivots[1].ly - p.pivots[0].ly
-                      );
-                      return { ...p, h: val, w: L + val };
+                      const newL = val;
+                      const newW = newL + p.h;
+                      return {
+                        ...p,
+                        w: newW,
+                        pivots: p.pivots.map((pv, idx) => {
+                          if (idx === 0) return { ...pv, lx: -newL / 2, ly: 0 };
+                          if (idx === 1) return { ...pv, lx: newL / 2, ly: 0 };
+                          return pv;
+                        }),
+                      };
                     }
-                    return { ...p, h: val };
+                    const factor = val / p.w;
+                    return {
+                      ...p,
+                      w: val,
+                      h: p.type === 'circle' ? val : p.h,
+                      pivots: p.pivots.map((pv) => ({ ...pv, lx: pv.lx * factor })),
+                    };
                   });
                 }}
                 className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
               />
             </label>
-          )}
 
+            {selPart.type !== 'circle' && (
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] text-slate-500">
+                  {selPart.type === 'bar' ? 'Espessura h (mm)' : 'Largura (mm)'}
+                </span>
+                <input
+                  type="number"
+                  step="1"
+                  value={Math.round(selPart.h * 10) / 10}
+                  onChange={(e) => {
+                    const val = Math.max(8, parseFloat(e.target.value) || 8);
+                    updatePart(selPart.id, (p) => {
+                      if (p.type === 'bar' && p.pivots.length >= 2) {
+                        const L = Math.hypot(
+                          p.pivots[1].lx - p.pivots[0].lx,
+                          p.pivots[1].ly - p.pivots[0].ly
+                        );
+                        return { ...p, h: val, w: L + val };
+                      }
+                      return { ...p, h: val };
+                    });
+                  }}
+                  className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+                />
+              </label>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2 mt-1">
           <label className="flex flex-col gap-1">
             <span className="text-[10px] text-slate-500">Ângulo (°)</span>
             <input

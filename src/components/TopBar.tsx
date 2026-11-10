@@ -14,6 +14,7 @@ import {
   Grid,
   Magnet,
   Sparkles,
+  Settings,
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -177,6 +178,7 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
             <option value="fourBar">4-Barras (Crank-Rocker)</option>
             <option value="sliderCrank">Biela-Manivela (Pistão)</option>
             <option value="quickReturn">Retorno Rápido (Quick-Return)</option>
+            <option value="gearTrain">Trem de Engrenagens (3 Estágios)</option>
             <option value="chebyshev">Chebyshev (Linha Reta)</option>
             <option value="pantograph">Pantógrafo</option>
             <option value="jansenLeg">Theo Jansen (Perna Mecânica)</option>
@@ -218,6 +220,18 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
           title="Exibir Cotas e Dimensões"
         >
           <Eye className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          onClick={() => setCamera((c) => ({ ...c, showGearContacts: !c.showGearContacts }))}
+          className={`p-1.5 rounded text-xs transition-colors ${
+            camera.showGearContacts !== false
+              ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+              : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+          title="Exibir Linhas de Ação e Contatos de Engrenagens"
+        >
+          <Settings className="w-3.5 h-3.5" />
         </button>
 
         {/* Trajetórias e Duração do Rastro */}
