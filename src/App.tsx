@@ -87,6 +87,7 @@ export const App: React.FC = () => {
         c: 'circle',
         t: 'tri',
         a: 'axis',
+        f: 'slot',
         j: 'joint',
         g: 'ground',
         m: 'motor',

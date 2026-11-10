@@ -1,4 +1,4 @@
-import { Camera, Part, Pivot, Point2D } from '../types/mechanism';
+import { Camera, Part, PartSlot, Pivot, Point2D } from '../types/mechanism';
 
 export const rotate2D = (x: number, y: number, angle: number): [number, number] => {
   const c = Math.cos(angle);
@@ -9,6 +9,47 @@ export const rotate2D = (x: number, y: number, angle: number): [number, number] 
 export const pivotWorldPos = (part: Part, pivot: Pivot): Point2D => {
   const [rx, ry] = rotate2D(pivot.lx, pivot.ly, part.rot);
   return { x: part.x + rx, y: part.y + ry };
+};
+
+export const slotWorldCenter = (part: Part, slot: PartSlot): Point2D => {
+  const [rx, ry] = rotate2D(slot.lx, slot.ly, part.rot);
+  return { x: part.x + rx, y: part.y + ry };
+};
+
+export const slotWorldEndpoints = (part: Part, slot: PartSlot): [Point2D, Point2D] => {
+  const center = slotWorldCenter(part, slot);
+  const totalAngle = part.rot + (slot.angle || 0);
+  const halfLen = slot.length / 2;
+  const dx = Math.cos(totalAngle) * halfLen;
+  const dy = Math.sin(totalAngle) * halfLen;
+  return [
+    { x: center.x - dx, y: center.y - dy },
+    { x: center.x + dx, y: center.y + dy },
+  ];
+};
+
+export const hitSlot = (
+  worldPt: Point2D,
+  parts: Part[],
+  camera: Camera,
+  thresholdPx = 12
+): { part: Part; slot: PartSlot } | null => {
+  const thresholdWorld = thresholdPx / camera.zoom;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.hidden || !p.slots) continue;
+    for (const slot of p.slots) {
+      const center = slotWorldCenter(p, slot);
+      const totalAngle = p.rot + (slot.angle || 0);
+      const [lx, ly] = rotate2D(worldPt.x - center.x, worldPt.y - center.y, -totalAngle);
+      const halfLen = slot.length / 2 + 6;
+      const halfWidth = (slot.width || 12) / 2 + thresholdWorld;
+      if (Math.abs(lx) <= halfLen && Math.abs(ly) <= halfWidth) {
+        return { part: p, slot };
+      }
+    }
+  }
+  return null;
 };
 
 export const worldToScreen = (world: Point2D, camera: Camera, canvasWidth: number, canvasHeight: number): Point2D => {

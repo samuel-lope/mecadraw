@@ -7,12 +7,14 @@ import {
   hitGizmo,
   hitPart,
   hitPivot,
+  hitSlot,
   pivotWorldPos,
   rotate2D,
   screenToWorld,
+  slotWorldCenter,
   worldToScreen,
 } from '../engine/geometry';
-import { Part, Pivot, Point2D } from '../types/mechanism';
+import { Part, PartSlot, Pivot, Point2D } from '../types/mechanism';
 import { createBar } from '../engine/presets';
 
 interface CadCanvasProps {
@@ -55,6 +57,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
   } | null>(null);
 
   const [hoveredPivot, setHoveredPivot] = useState<{ part: Part; pivot: Pivot } | null>(null);
+  const [hoveredSlot, setHoveredSlot] = useState<{ part: Part; slot: PartSlot } | null>(null);
   const [hoveredPart, setHoveredPart] = useState<Part | null>(null);
 
   const {
@@ -73,6 +76,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     addPart,
     updatePart,
     connectJoint,
+    addSlotToPart,
+    deleteSlot,
+    connectPinToSlot,
     pendingJointPivot,
     setPendingJointPivot,
     togglePivotGround,
@@ -104,7 +110,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [simRunning, stepSim, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredPart, pendingJointPivot]);
+  }, [simRunning, stepSim, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot]);
 
   // Função Principal de Renderização
   const drawCanvas = useCallback(() => {
@@ -288,8 +294,135 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.restore();
     });
 
+    // 4.1 Fendas Mecânicas Internas (Slots)
+    parts.filter((p) => !p.hidden).forEach((p) => {
+      (p.slots || []).forEach((slot) => {
+        const sCenter = worldToScreen(slotWorldCenter(p, slot), camera, w, h);
+        const totalAngle = p.rot + (slot.angle || 0);
+        const sw = slot.length * camera.zoom;
+        const sh = (slot.width || 12) * camera.zoom;
+        const isHovered = hoveredSlot?.slot.id === slot.id;
+
+        ctx.save();
+        ctx.translate(sCenter.x, sCenter.y);
+        ctx.rotate(totalAngle);
+
+        // Rasgo usinado (groove)
+        ctx.beginPath();
+        ctx.roundRect(-sw / 2, -sh / 2, sw, sh, sh / 2);
+        ctx.fillStyle = isDark ? 'rgba(15, 23, 42, 0.75)' : 'rgba(241, 245, 249, 0.9)';
+        ctx.fill();
+
+        ctx.strokeStyle = isHovered ? '#0ea5e9' : isDark ? '#64748b' : '#94a3b8';
+        ctx.lineWidth = isHovered ? 2.5 : 1.8;
+        ctx.stroke();
+
+        // Linha de centro tracejada da fenda (norma técnica)
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = isDark ? '#94a3b8' : '#64748b';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-sw / 2 + sh / 4, 0);
+        ctx.lineTo(sw / 2 - sh / 4, 0);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Batentes de fim de curso (se closedEnds !== false)
+        if (slot.closedEnds !== false) {
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(-sw / 2, -sh / 2);
+          ctx.lineTo(-sw / 2, sh / 2);
+          ctx.moveTo(sw / 2, -sh / 2);
+          ctx.lineTo(sw / 2, sh / 2);
+          ctx.stroke();
+        }
+
+        // Rótulo da Fenda (ex: A-S1)
+        const labelText = slot.label || `${p.letter || 'A'}-S`;
+        ctx.font = 'bold 9px monospace';
+        const labelW = ctx.measureText(labelText).width + 8;
+        ctx.fillStyle = isHovered ? '#0284c7' : '#475569';
+        ctx.beginPath();
+        ctx.roundRect(-labelW / 2, -sh / 2 - 14, labelW, 12, 3);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText(labelText, 0, -sh / 2 - 5);
+
+        ctx.restore();
+      });
+    });
+
     // 5. Juntas Conectadas (Indicadores Visuais Claros)
     joints.forEach((j) => {
+      if (j.type === 'pin-in-slot' && j.slotId) {
+        let pinPos: Point2D | null = null;
+        let pinLabel = '';
+        let slotCenter: Point2D | null = null;
+        let slotLabel = '';
+        let isHidden = false;
+
+        for (const p of parts) {
+          for (const pv of p.pivots) {
+            if (pv.id === j.p1) {
+              if (p.hidden) isHidden = true;
+              pinPos = pivotWorldPos(p, pv);
+              pinLabel = pv.label || 'P';
+            }
+          }
+          if (p.slots) {
+            for (const sl of p.slots) {
+              if (sl.id === j.slotId) {
+                if (p.hidden) isHidden = true;
+                slotCenter = slotWorldCenter(p, sl);
+                slotLabel = sl.label || 'S';
+              }
+            }
+          }
+        }
+
+        if (isHidden || !pinPos || !slotCenter) return;
+
+        const sPin = worldToScreen(pinPos, camera, w, h);
+        const isJointHovered =
+          hoveredPivot?.pivot.id === j.p1 ||
+          hoveredSlot?.slot.id === j.slotId ||
+          selection.pivotId === j.p1;
+
+        // Halo distintivo pino-em-fenda (anel ciano / esmeralda)
+        ctx.strokeStyle = isJointHovered ? '#10b981' : '#06b6d4';
+        ctx.lineWidth = isJointHovered ? 2.5 : 1.8;
+        ctx.beginPath();
+        ctx.arc(sPin.x, sPin.y, 13, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        ctx.fillStyle = isJointHovered ? 'rgba(16, 185, 129, 0.25)' : 'rgba(6, 182, 212, 0.20)';
+        ctx.beginPath();
+        ctx.arc(sPin.x, sPin.y, 10, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Badge pino-em-fenda (ex: B1 ⟷ A-S1)
+        const badgeText = `${pinLabel} ⟷ ${slotLabel}`;
+        ctx.font = 'bold 9px monospace';
+        const badgeWidth = Math.max(48, ctx.measureText(badgeText).width + 8);
+        const badgeHeight = 15;
+        const badgeX = sPin.x + 10;
+        const badgeY = sPin.y - 18;
+
+        ctx.fillStyle = isJointHovered ? '#059669' : '#0891b2';
+        ctx.beginPath();
+        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 3);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText(badgeText, badgeX + badgeWidth / 2, badgeY + 11);
+        return;
+      }
+
       const part1 = parts.find((p) => p.pivots.some((v) => v.id === j.p1));
       const part2 = parts.find((p) => p.pivots.some((v) => v.id === j.p2));
       if (part1?.hidden || part2?.hidden) return;
@@ -609,6 +742,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     // Ferramentas de Aplicação Rápida em Eixos:
     const visibleParts = parts.filter((p) => !p.hidden);
     const clickedPivot = hitPivot(worldPt, visibleParts, camera);
+    const clickedSlot = hitSlot(worldPt, visibleParts, camera);
     const clickedPart = hitPart(worldPt, visibleParts);
 
     if (tool === 'motor') {
@@ -625,6 +759,18 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     }
     if (tool === 'trace') {
       if (clickedPivot) togglePivotTrace(clickedPivot.pivot.id);
+      return;
+    }
+
+    // Ferramenta Adicionar Fenda (+ Slot)
+    if (tool === 'slot') {
+      if (clickedPart) {
+        recordSnapshot();
+        const [lx, ly] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
+        addSlotToPart(clickedPart.id, 80, 0, true, lx, ly);
+        setSelection({ partId: clickedPart.id });
+        setTool('sel');
+      }
       return;
     }
 
@@ -655,6 +801,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           connectJoint(pendingJointPivot, clickedPivot);
           setPendingJointPivot(null);
         }
+      } else if (clickedSlot && pendingJointPivot) {
+        connectPinToSlot(pendingJointPivot, clickedSlot);
+        setPendingJointPivot(null);
       }
       return;
     }
@@ -663,6 +812,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     if (tool === 'del') {
       if (clickedPivot) {
         store.deletePivot(clickedPivot.part.id, clickedPivot.pivot.id);
+      } else if (clickedSlot) {
+        deleteSlot(clickedSlot.part.id, clickedSlot.slot.id);
       } else if (clickedPart) {
         deletePart(clickedPart.id);
       }
@@ -703,12 +854,14 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           while (changed) {
             changed = false;
             for (const j of joints) {
-              if (cluster.has(j.p1) && !cluster.has(j.p2)) {
-                cluster.add(j.p2);
-                changed = true;
-              } else if (cluster.has(j.p2) && !cluster.has(j.p1)) {
-                cluster.add(j.p1);
-                changed = true;
+              if (j.p2 !== undefined) {
+                if (cluster.has(j.p1) && !cluster.has(j.p2)) {
+                  cluster.add(j.p2);
+                  changed = true;
+                } else if (cluster.has(j.p2) && !cluster.has(j.p1)) {
+                  cluster.add(j.p1);
+                  changed = true;
+                }
               }
             }
           }
@@ -801,6 +954,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     // Atualizar Hover states
     const visibleParts = parts.filter((p) => !p.hidden);
     setHoveredPivot(hitPivot(rawWorld, visibleParts, camera));
+    setHoveredSlot(hitSlot(rawWorld, visibleParts, camera));
     setHoveredPart(hitPart(rawWorld, visibleParts));
 
     if (!dragState) return;

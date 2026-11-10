@@ -1,4 +1,4 @@
-import { Joint, MechanismAnalysis, Part, Point2D, TelemetrySample } from '../types/mechanism';
+import { Joint, MechanismAnalysis, Part, PartSlot, Point2D, TelemetrySample } from '../types/mechanism';
 import { distance2D, pivotWorldPos, rotate2D } from './geometry';
 
 export interface SimParticle {
@@ -27,10 +27,18 @@ export interface DistanceConstraint {
   length: number;
 }
 
+export interface SimPinInSlot {
+  pinId: number;
+  partId: number;
+  slotId: number;
+  slot: PartSlot;
+}
+
 export interface SimulationInstance {
   particles: Record<number, SimParticle>;
   distanceConstraints: DistanceConstraint[];
   joints: [number, number][];
+  pinInSlots: SimPinInSlot[];
   motors: SimMotor[];
   time: number;
   errorResidual: number;
@@ -41,6 +49,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
   const particles: Record<number, SimParticle> = {};
   const distanceConstraints: DistanceConstraint[] = [];
   const simJoints: [number, number][] = [];
+  const simPinInSlots: SimPinInSlot[] = [];
   const motors: SimMotor[] = [];
 
   // 1. Inicializar partículas a partir dos pivôs das peças
@@ -104,9 +113,20 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     }
   }
 
-  // 4. Juntas coincidentes entre peças
+  // 4. Juntas coincidentes entre peças ou juntas pino-em-fenda
   for (const j of joints) {
-    if (particles[j.p1] && particles[j.p2]) {
+    if (j.type === 'pin-in-slot' && j.slotId !== undefined) {
+      const partWithSlot = parts.find((p) => p.slots?.some((s) => s.id === j.slotId));
+      const slot = partWithSlot?.slots?.find((s) => s.id === j.slotId);
+      if (partWithSlot && slot && particles[j.p1]) {
+        simPinInSlots.push({
+          pinId: j.p1,
+          partId: partWithSlot.id,
+          slotId: slot.id,
+          slot,
+        });
+      }
+    } else if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
       simJoints.push([j.p1, j.p2]);
     }
   }
@@ -115,11 +135,37 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     particles,
     distanceConstraints,
     joints: simJoints,
+    pinInSlots: simPinInSlots,
     motors,
     time: 0,
     errorResidual: 0,
     lockedUp: false,
   };
+};
+
+export const computePartPose = (
+  part: Part,
+  particles: Record<number, SimParticle>
+): { x: number; y: number; rot: number } => {
+  if (part.pivots.length === 0) return { x: part.x, y: part.y, rot: part.rot };
+  if (part.pivots.length === 1) {
+    const p = part.pivots[0];
+    const sp = particles[p.id];
+    if (!sp) return { x: part.x, y: part.y, rot: part.rot };
+    const [rx, ry] = rotate2D(p.lx, p.ly, part.rot);
+    return { x: sp.x - rx, y: sp.y - ry, rot: part.rot };
+  }
+  const [pv0, pv1] = part.pivots;
+  const s0 = particles[pv0.id];
+  const s1 = particles[pv1.id];
+  if (s0 && s1) {
+    const simAng = Math.atan2(s1.y - s0.y, s1.x - s0.x);
+    const localAng = Math.atan2(pv1.ly - pv0.ly, pv1.lx - pv0.lx);
+    const rot = simAng - localAng;
+    const [rx, ry] = rotate2D(pv0.lx, pv0.ly, rot);
+    return { x: s0.x - rx, y: s0.y - ry, rot };
+  }
+  return { x: part.x, y: part.y, rot: part.rot };
 };
 
 export const stepSimulation = (
@@ -214,6 +260,94 @@ export const stepSimulation = (
         const my = (a.y + b.y) * 0.5;
         a.x = b.x = mx;
         a.y = b.y = my;
+      }
+    }
+
+    // D. Restrições de Pino em Fenda (Pin-in-Slot)
+    for (const pis of sim.pinInSlots) {
+      const pin = sim.particles[pis.pinId];
+      const part = parts.find((p) => p.id === pis.partId);
+      if (!pin || !part) continue;
+
+      const pose = computePartPose(part, sim.particles);
+      const [csx, csy] = rotate2D(pis.slot.lx, pis.slot.ly, pose.rot);
+      const slotCenterX = pose.x + csx;
+      const slotCenterY = pose.y + csy;
+
+      const totalAngle = pose.rot + (pis.slot.angle || 0);
+      const dirX = Math.cos(totalAngle);
+      const dirY = Math.sin(totalAngle);
+      const normX = -Math.sin(totalAngle);
+      const normY = Math.cos(totalAngle);
+
+      const dx = pin.x - slotCenterX;
+      const dy = pin.y - slotCenterY;
+
+      // Distância normal (perpendicular à fenda)
+      const perpDist = dx * normX + dy * normY;
+      maxResidual = Math.max(maxResidual, Math.abs(perpDist));
+
+      // Limites de fim de curso (se closedEnds !== false)
+      let endDist = 0;
+      if (pis.slot.closedEnds !== false) {
+        const proj = dx * dirX + dy * dirY;
+        const halfLen = (pis.slot.length || 80) / 2;
+        if (proj > halfLen) {
+          endDist = proj - halfLen;
+        } else if (proj < -halfLen) {
+          endDist = proj - (-halfLen);
+        }
+        maxResidual = Math.max(maxResidual, Math.abs(endDist));
+      }
+
+      // Distribuição de correção entre pino e corpo da fenda
+      const freeLinkPivots = part.pivots.filter((p) => !sim.particles[p.id]?.fixed);
+      const hasFreePivots = freeLinkPivots.length > 0;
+      const pinWeight = pin.fixed ? 0 : 1;
+      const linkWeight = hasFreePivots ? 1 : 0;
+      const totalWeight = pinWeight + linkWeight;
+      if (totalWeight === 0) continue;
+
+      const pinFrac = pinWeight / totalWeight;
+      const linkFrac = linkWeight / totalWeight;
+
+      // 1. Correção no Pino
+      if (pinFrac > 0) {
+        pin.x -= (perpDist * normX + endDist * dirX) * pinFrac;
+        pin.y -= (perpDist * normY + endDist * dirY) * pinFrac;
+      }
+
+      // 2. Correção Reversa no Elo da Fenda
+      if (linkFrac > 0) {
+        const corrX = (perpDist * normX + endDist * dirX) * linkFrac;
+        const corrY = (perpDist * normY + endDist * dirY) * linkFrac;
+
+        const fixedPivots = part.pivots.filter((p) => sim.particles[p.id]?.fixed);
+        if (fixedPivots.length === 1) {
+          // Rotação pura ao redor do pivô fixo
+          const fixedPv = fixedPivots[0];
+          const origin = sim.particles[fixedPv.id];
+          const rx = pin.x - origin.x;
+          const ry = pin.y - origin.y;
+          const r2 = rx * rx + ry * ry;
+          if (r2 > 1e-4) {
+            const dTheta = (rx * corrY - ry * corrX) / r2;
+            for (const freePv of freeLinkPivots) {
+              const sp = sim.particles[freePv.id];
+              const prx = sp.x - origin.x;
+              const pry = sp.y - origin.y;
+              sp.x -= dTheta * pry;
+              sp.y += dTheta * prx;
+            }
+          }
+        } else {
+          // Translação dos pivôs livres
+          for (const freePv of freeLinkPivots) {
+            const sp = sim.particles[freePv.id];
+            sp.x += corrX;
+            sp.y += corrY;
+          }
+        }
       }
     }
   }
@@ -328,13 +462,14 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
   const hasGround = groundPivots.length > 0;
   const numLinks = parts.length + (hasGround ? 1 : 0);
 
-  // Contagem de juntas J1 (revolutas e sliders)
-  const numRevolute = joints.length;
+  // Contagem de juntas J1 (revolutas, fixas e sliders) e J2 (pino em fenda)
+  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot').length;
+  const numPinInSlots = joints.filter((j) => j.type === 'pin-in-slot').length;
   const numFixedJoints = groundPivots.length;
-  const numSliders = parts.flatMap(p => p.pivots).filter(pv => pv.slider?.enabled).length;
+  const numSliders = parts.flatMap((p) => p.pivots).filter((pv) => pv.slider?.enabled).length;
 
   const J1 = numRevolute + numFixedJoints + numSliders;
-  const J2 = 0; // Juntas de ordem superior
+  const J2 = numPinInSlots; // Fenda permite rotação e translação (2 graus de liberdade relativos)
 
   // Critério de Gruebler-Kutzbach: M = 3(L - 1) - 2*J1 - J2
   const dof = numLinks > 0 ? 3 * (numLinks - 1) - 2 * J1 - J2 : 0;

@@ -17,6 +17,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     deletePivot,
     connectJoint,
     disconnectJoint,
+    addSlotToPart,
+    updateSlot,
+    deleteSlot,
+    connectPinToSlot,
     togglePivotGround,
     togglePivotMotor,
     togglePivotSlider,
@@ -32,15 +36,38 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
   const selPart = parts.find((p) => p.id === selection.partId);
   const selPivot = selPart?.pivots.find((v) => v.id === selection.pivotId);
 
-  // Todos os outros pivôs disponíveis para conexão
-  const otherPivots: { part: typeof parts[0]; pivot: typeof parts[0]['pivots'][0] }[] = [];
+  // Outros alvos (eixos e fendas) disponíveis para conexão
+  const otherTargets: {
+    type: 'pivot' | 'slot';
+    id: string;
+    label: string;
+    part: typeof parts[0];
+    pivot?: typeof parts[0]['pivots'][0];
+    slot?: NonNullable<typeof parts[0]['slots']>[0];
+  }[] = [];
+
   if (selPart && selPivot) {
     parts.forEach((p) => {
-      p.pivots.forEach((pv) => {
-        if (pv.id !== selPivot.id) {
-          otherPivots.push({ part: p, pivot: pv });
-        }
-      });
+      if (p.id !== selPart.id) {
+        p.pivots.forEach((pv) => {
+          otherTargets.push({
+            type: 'pivot',
+            id: `pivot:${pv.id}`,
+            label: `Eixo ${pv.label} (Peça ${p.letter || 'A'})`,
+            part: p,
+            pivot: pv,
+          });
+        });
+        (p.slots || []).forEach((sl) => {
+          otherTargets.push({
+            type: 'slot',
+            id: `slot:${p.id}:${sl.id}`,
+            label: `Fenda ${sl.label} (Peça ${p.letter || 'A'})`,
+            part: p,
+            slot: sl,
+          });
+        });
+      }
     });
   }
 
@@ -49,6 +76,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     ? joints
         .filter((j) => j.p1 === selPivot.id || j.p2 === selPivot.id)
         .map((j) => {
+          if (j.type === 'pin-in-slot' && j.slotId) {
+            let partnerInfo = 'Fenda Desconhecida';
+            for (const p of parts) {
+              const sl = p.slots?.find((s) => s.id === j.slotId);
+              if (sl) {
+                partnerInfo = `Peça ${p.letter || 'A'} — Fenda ${sl.label || 'S'}`;
+              }
+            }
+            return { joint: j, partnerInfo, isSlot: true };
+          }
           const partnerId = j.p1 === selPivot.id ? j.p2 : j.p1;
           let partnerInfo = 'Eixo Desconhecido';
           for (const p of parts) {
@@ -58,7 +95,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               }
             }
           }
-          return { joint: j, partnerInfo };
+          return { joint: j, partnerInfo, isSlot: false };
         })
     : [];
 
@@ -267,6 +304,115 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
         </div>
       </div>
 
+      {/* Fendas da Peça */}
+      <div className="flex flex-col gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
+        <div className="flex items-center justify-between">
+          <h4 className="font-semibold text-slate-900 dark:text-slate-100 text-[11px] uppercase tracking-wider">
+            Fendas da Peça ({(selPart.slots || []).length})
+          </h4>
+          <button
+            onClick={() => addSlotToPart(selPart.id, 80, 0, true, 0, 0)}
+            className="flex items-center gap-1 text-[10px] text-blue-600 hover:text-blue-700 font-medium py-0.5 px-1.5 rounded bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900"
+          >
+            <Plus className="w-3 h-3" />
+            <span>+ Fenda</span>
+          </button>
+        </div>
+
+        {(selPart.slots || []).length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {(selPart.slots || []).map((slot) => (
+              <div
+                key={slot.id}
+                className="flex flex-col gap-1.5 p-2 bg-slate-50 dark:bg-slate-800/40 rounded border border-slate-200 dark:border-slate-700 text-xs"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-bold font-mono text-blue-600 dark:text-blue-400">
+                    {slot.label || `Fenda ${slot.id}`}
+                  </span>
+                  <button
+                    onClick={() => deleteSlot(selPart.id, slot.id)}
+                    className="p-1 text-slate-400 hover:text-rose-500"
+                    title="Excluir fenda"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-500">Comprimento (mm)</span>
+                    <input
+                      type="number"
+                      min="20"
+                      max="500"
+                      step="5"
+                      value={slot.length}
+                      onChange={(e) => {
+                        const val = Math.max(10, parseFloat(e.target.value) || 10);
+                        updateSlot(selPart.id, slot.id, { length: val });
+                      }}
+                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-500">Ângulo (°)</span>
+                    <input
+                      type="number"
+                      step="5"
+                      value={Math.round(((slot.angle * 180) / Math.PI) % 360)}
+                      onChange={(e) => {
+                        const deg = parseFloat(e.target.value) || 0;
+                        updateSlot(selPart.id, slot.id, { angle: (deg * Math.PI) / 180 });
+                      }}
+                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-500">Local X (mm)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      value={Math.round(slot.lx * 10) / 10}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        updateSlot(selPart.id, slot.id, { lx: val });
+                      }}
+                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-slate-500">Local Y (mm)</span>
+                    <input
+                      type="number"
+                      step="1"
+                      value={Math.round(slot.ly * 10) / 10}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        updateSlot(selPart.id, slot.id, { ly: val });
+                      }}
+                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                    />
+                  </label>
+                </div>
+
+                <label className="flex items-center gap-1.5 cursor-pointer mt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={slot.closedEnds !== false}
+                    onChange={(e) => updateSlot(selPart.id, slot.id, { closedEnds: e.target.checked })}
+                    className="accent-blue-600 rounded"
+                  />
+                  <span className="text-[10px] text-slate-600 dark:text-slate-300">Batentes Fechados</span>
+                </label>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-slate-400 italic text-[10px]">Nenhuma fenda nesta peça.</p>
+        )}
+      </div>
+
       {/* Detalhes do Eixo Selecionado & Gestão de Conexões */}
       {selPivot ? (
         <div className="flex flex-col gap-2.5 border-t border-slate-100 dark:border-slate-800 pt-3 bg-slate-50/70 dark:bg-slate-800/40 p-2.5 rounded-lg border border-slate-200 dark:border-slate-700/60">
@@ -450,10 +596,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             )}
 
             {/* Criar Conexão Direta via Seletor */}
-            {otherPivots.length > 0 && (
+            {otherTargets.length > 0 && (
               <div className="flex flex-col gap-1 bg-white dark:bg-slate-800/80 p-1.5 rounded border border-slate-200 dark:border-slate-700">
                 <span className="text-[10px] font-medium text-slate-600 dark:text-slate-300">
-                  Unir com outro eixo:
+                  Unir com outro elemento:
                 </span>
                 <div className="flex gap-1">
                   <select
@@ -461,27 +607,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                     onChange={(e) => setSelectedTargetPivotId(e.target.value)}
                     className="flex-1 text-[11px] p-1 bg-slate-50 dark:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded outline-none"
                   >
-                    <option value="">Selecione eixo...</option>
-                    {otherPivots.map(({ part, pivot }) => (
-                      <option key={pivot.id} value={pivot.id}>
-                        {pivot.label} (Peça {part.letter || 'A'})
+                    <option value="">Selecione eixo ou fenda...</option>
+                    {otherTargets.map((target) => (
+                      <option key={target.id} value={target.id}>
+                        {target.label}
                       </option>
                     ))}
                   </select>
                   <button
                     onClick={() => {
-                      const targetId = Number(selectedTargetPivotId);
-                      if (targetId) {
-                        const target = otherPivots.find((op) => op.pivot.id === targetId);
-                        if (target) {
-                          connectJoint({ part: selPart, pivot: selPivot }, target);
-                          setSelectedTargetPivotId('');
-                        }
+                      if (!selectedTargetPivotId) return;
+                      const target = otherTargets.find((t) => t.id === selectedTargetPivotId);
+                      if (!target) return;
+                      if (target.type === 'pivot' && target.pivot) {
+                        connectJoint({ part: selPart, pivot: selPivot }, { part: target.part, pivot: target.pivot });
+                      } else if (target.type === 'slot' && target.slot) {
+                        connectPinToSlot({ part: selPart, pivot: selPivot }, { part: target.part, slot: target.slot });
                       }
+                      setSelectedTargetPivotId('');
                     }}
                     disabled={!selectedTargetPivotId}
                     className="flex items-center gap-0.5 px-2 py-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded font-medium text-xs transition-colors"
-                    title="Conectar por junta revoluta"
+                    title="Conectar"
                   >
                     <Plus className="w-3 h-3" />
                     <span>Unir</span>

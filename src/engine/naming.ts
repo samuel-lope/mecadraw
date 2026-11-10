@@ -32,11 +32,16 @@ export const syncPartsAndPivots = (parts: Part[]): Part[] => {
       ...pv,
       label: `${letter}${pvIdx + 1}`,
     }));
+    const slots = (part.slots || []).map((s, sIdx) => ({
+      ...s,
+      label: `${letter}-S${sIdx + 1}`,
+    }));
 
     return {
       ...part,
       letter,
       pivots,
+      slots,
     };
   });
 };

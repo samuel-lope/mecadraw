@@ -9,6 +9,17 @@ export interface SliderGuide {
   length: number; // Comprimento da guia visual em mm
 }
 
+export interface PartSlot {
+  id: number;
+  label?: string; // ex: S1, A-S1
+  lx: number; // Posição local X do centro da fenda
+  ly: number; // Posição local Y do centro da fenda
+  length: number; // Comprimento útil da fenda em mm
+  angle: number; // Ângulo relativo à peça em radianos (0 = ao longo da peça)
+  width?: number; // Largura do rasgo (padrão 12mm)
+  closedEnds?: boolean; // Se true, possui batentes fechados nas extremidades
+}
+
 export interface Pivot {
   id: number;
   label?: string; // Identificador legível (ex: A1, B2)
@@ -36,6 +47,7 @@ export interface Part {
   w: number; // Largura ou comprimento (mm)
   h: number; // Altura ou espessura (mm)
   pivots: Pivot[];
+  slots?: PartSlot[]; // Fendas internas mecânicas por onde eixos correm
   color?: string;
   locked?: boolean;
   hidden?: boolean; // Peça e eixos ocultos visualmente (mantém cálculo cinemático)
@@ -44,8 +56,9 @@ export interface Part {
 export interface Joint {
   id: number;
   p1: number; // ID do pivô A
-  p2: number; // ID do pivô B
-  type?: 'revolute' | 'weld';
+  p2?: number; // ID do pivô B (se revoluta)
+  slotId?: number; // ID da fenda (se pino-em-fenda)
+  type?: 'revolute' | 'weld' | 'pin-in-slot';
 }
 
 export type ToolType =
@@ -55,6 +68,7 @@ export type ToolType =
   | 'circle'
   | 'tri'
   | 'axis'
+  | 'slot'
   | 'joint'
   | 'motor'
   | 'ground'

@@ -4,6 +4,7 @@ import {
   Joint,
   MechanismAnalysis,
   Part,
+  PartSlot,
   Pivot,
   Point2D,
   SelectionState,
@@ -12,7 +13,7 @@ import {
 } from '../types/mechanism';
 import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
-import { pivotWorldPos } from '../engine/geometry';
+import { pivotWorldPos, slotWorldCenter } from '../engine/geometry';
 import { syncPartsAndPivots } from '../engine/naming';
 
 export interface MechanismStateSnapshot {
@@ -185,7 +186,9 @@ export const useMechanismStore = () => {
       const pivotIds = target.pivots.map((v) => v.id);
 
       setParts((prev) => syncPartsAndPivots(prev.filter((p) => p.id !== partId)));
-      setJoints((prev) => prev.filter((j) => !pivotIds.includes(j.p1) && !pivotIds.includes(j.p2)));
+      setJoints((prev) =>
+        prev.filter((j) => !pivotIds.includes(j.p1) && (j.p2 === undefined || !pivotIds.includes(j.p2)))
+      );
       setSelection({});
     },
     [parts, recordSnapshot]
@@ -264,6 +267,103 @@ export const useMechanismStore = () => {
     (jointId: number) => {
       recordSnapshot();
       setJoints((prev) => prev.filter((j) => j.id !== jointId));
+    },
+    [recordSnapshot]
+  );
+
+  // Gestão de Fendas (Slots)
+  const addSlotToPart = useCallback(
+    (partId: number, length = 80, angle = 0, closedEnds = true, lx = 0, ly = 0) => {
+      recordSnapshot();
+      setParts((prev) =>
+        syncPartsAndPivots(
+          prev.map((p) => {
+            if (p.id !== partId) return p;
+            const newSlot: PartSlot = {
+              id: Date.now() + Math.floor(Math.random() * 1000),
+              lx,
+              ly,
+              length,
+              angle,
+              width: 12,
+              closedEnds,
+            };
+            return {
+              ...p,
+              slots: [...(p.slots || []), newSlot],
+            };
+          })
+        )
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const updateSlot = useCallback(
+    (partId: number, slotId: number, updater: Partial<PartSlot> | ((s: PartSlot) => PartSlot)) => {
+      recordSnapshot();
+      setParts((prev) =>
+        syncPartsAndPivots(
+          prev.map((p) => {
+            if (p.id !== partId || !p.slots) return p;
+            return {
+              ...p,
+              slots: p.slots.map((s) => {
+                if (s.id !== slotId) return s;
+                return typeof updater === 'function' ? updater(s) : { ...s, ...updater };
+              }),
+            };
+          })
+        )
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const deleteSlot = useCallback(
+    (partId: number, slotId: number) => {
+      recordSnapshot();
+      setParts((prev) =>
+        syncPartsAndPivots(
+          prev.map((p) => {
+            if (p.id !== partId || !p.slots) return p;
+            return {
+              ...p,
+              slots: p.slots.filter((s) => s.id !== slotId),
+            };
+          })
+        )
+      );
+      setJoints((prev) => prev.filter((j) => j.slotId !== slotId));
+    },
+    [recordSnapshot]
+  );
+
+  const connectPinToSlot = useCallback(
+    (pivotRef: { part: Part; pivot: Pivot }, slotRef: { part: Part; slot: PartSlot }) => {
+      if (pivotRef.part.id === slotRef.part.id) return;
+      recordSnapshot();
+
+      const sCenter = slotWorldCenter(slotRef.part, slotRef.slot);
+      const pinPos = pivotWorldPos(pivotRef.part, pivotRef.pivot);
+      const dx = sCenter.x - pinPos.x;
+      const dy = sCenter.y - pinPos.y;
+
+      if (!pivotRef.pivot.fixed && !pivotRef.pivot.motor) {
+        setParts((prev) =>
+          prev.map((p) => (p.id === pivotRef.part.id ? { ...p, x: p.x + dx, y: p.y + dy } : p))
+        );
+      }
+
+      const newJoint: Joint = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        p1: pivotRef.pivot.id,
+        slotId: slotRef.slot.id,
+        type: 'pin-in-slot',
+      };
+
+      setJoints((prev) => [...prev, newJoint]);
+      setPendingJointPivot(null);
     },
     [recordSnapshot]
   );
@@ -576,6 +676,10 @@ export const useMechanismStore = () => {
     deletePivot,
     connectJoint,
     disconnectJoint,
+    addSlotToPart,
+    updateSlot,
+    deleteSlot,
+    connectPinToSlot,
     togglePivotGround,
     togglePivotMotor,
     togglePivotSlider,
