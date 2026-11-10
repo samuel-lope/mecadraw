@@ -69,6 +69,15 @@ export const App: React.FC = () => {
         return;
       }
 
+      const k = e.key.toLowerCase();
+
+      // Ocultar peça selecionada (H)
+      if (k === 'h' && selection.partId) {
+        e.preventDefault();
+        store.togglePartVisibility(selection.partId);
+        return;
+      }
+
       // Mapeamento de ferramentas
       const keyMap: Record<string, ToolType> = {
         v: 'sel',
@@ -86,7 +95,6 @@ export const App: React.FC = () => {
         x: 'del',
       };
 
-      const k = e.key.toLowerCase();
       if (keyMap[k]) {
         setTool(keyMap[k]);
       }

@@ -381,6 +381,23 @@ export const useMechanismStore = () => {
     setSelection({ partId: clone.id });
   }, [selection.partId, parts, recordSnapshot]);
 
+  // Ocultar / Exibir Peças
+  const togglePartVisibility = useCallback(
+    (partId: number) => {
+      recordSnapshot();
+      setParts((prev) =>
+        prev.map((p) => (p.id === partId ? { ...p, hidden: !p.hidden } : p))
+      );
+      setSelection((sel) => (sel.partId === partId ? {} : sel));
+    },
+    [recordSnapshot]
+  );
+
+  const showAllParts = useCallback(() => {
+    recordSnapshot();
+    setParts((prev) => prev.map((p) => ({ ...p, hidden: false })));
+  }, [recordSnapshot]);
+
   // Carregar Preset
   const loadPreset = useCallback(
     (presetKey: keyof typeof PRESETS) => {
@@ -564,6 +581,8 @@ export const useMechanismStore = () => {
     togglePivotSlider,
     togglePivotTrace,
     duplicateSelected,
+    togglePartVisibility,
+    showAllParts,
     loadPreset,
     clearAll,
     exportJson,

@@ -81,6 +81,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     togglePivotTrace,
     deletePart,
     duplicateSelected,
+    togglePartVisibility,
+    showAllParts,
   } = store;
 
   // Render Loop & Simulação
@@ -200,7 +202,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     }
 
     // 3. Trilhas de Guias Lineares (Sliders)
-    parts.forEach((p) => {
+    parts.filter((p) => !p.hidden).forEach((p) => {
       p.pivots.forEach((pv) => {
         if (!pv.slider?.enabled) return;
         const wpos = pivotWorldPos(p, pv);
@@ -233,7 +235,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     });
 
     // 4. Desenho de Peças (Corpos Rígidos)
-    parts.forEach((p) => {
+    parts.filter((p) => !p.hidden).forEach((p) => {
       const isSelected = selection.partId === p.id;
       const isHovered = hoveredPart?.id === p.id;
       const sCenter = worldToScreen({ x: p.x, y: p.y }, camera, w, h);
@@ -288,6 +290,10 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     // 5. Juntas Conectadas (Indicadores Visuais Claros)
     joints.forEach((j) => {
+      const part1 = parts.find((p) => p.pivots.some((v) => v.id === j.p1));
+      const part2 = parts.find((p) => p.pivots.some((v) => v.id === j.p2));
+      if (part1?.hidden || part2?.hidden) return;
+
       let p1Pos: Point2D | null = null;
       let p2Pos: Point2D | null = null;
       let p1Label = '';
@@ -361,7 +367,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     });
 
     // 6. Eixos / Pivôs (Fixo, Motor, Slider, Rótulos de Identificação)
-    parts.forEach((p) => {
+    parts.filter((p) => !p.hidden).forEach((p) => {
       p.pivots.forEach((pv, pvIdx) => {
         const wpos = pivotWorldPos(p, pv);
         const s = worldToScreen(wpos, camera, w, h);
@@ -436,7 +442,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     // 7. Gizmos de Transformação na Peça Selecionada
     if (selection.partId && !simRunning) {
-      const selPart = parts.find((p) => p.id === selection.partId);
+      const selPart = parts.find((p) => p.id === selection.partId && !p.hidden);
       if (selPart) {
         // Handle de Rotação Superior
         const rotHandleWorld = getPartRotateHandle(selPart);
@@ -601,8 +607,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     }
 
     // Ferramentas de Aplicação Rápida em Eixos:
-    const clickedPivot = hitPivot(worldPt, parts, camera);
-    const clickedPart = hitPart(worldPt, parts);
+    const visibleParts = parts.filter((p) => !p.hidden);
+    const clickedPivot = hitPivot(worldPt, visibleParts, camera);
+    const clickedPart = hitPart(worldPt, visibleParts);
 
     if (tool === 'motor') {
       if (clickedPivot) togglePivotMotor(clickedPivot.pivot.id);
@@ -792,8 +799,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     const rawWorld = screenToWorld(screenPt, camera, cv.clientWidth, cv.clientHeight);
 
     // Atualizar Hover states
-    setHoveredPivot(hitPivot(rawWorld, parts, camera));
-    setHoveredPart(hitPart(rawWorld, parts));
+    const visibleParts = parts.filter((p) => !p.hidden);
+    setHoveredPivot(hitPivot(rawWorld, visibleParts, camera));
+    setHoveredPart(hitPart(rawWorld, visibleParts));
 
     if (!dragState) return;
 
@@ -1048,6 +1056,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           ) : (
             <>
               <button
+                onClick={() => togglePartVisibility(selectedPart.id)}
+                className="px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                title="Ocultar Peça e Eixos (H)"
+              >
+                Ocultar
+              </button>
+              <button
                 onClick={duplicateSelected}
                 className="px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                 title="Duplicar Peça (Ctrl+D)"
@@ -1064,6 +1079,17 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             </>
           )}
         </div>
+      )}
+
+      {/* Botão para Reexibir Peças Ocultas */}
+      {parts.some((p) => p.hidden) && (
+        <button
+          onClick={showAllParts}
+          className="absolute top-4 right-4 flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-lg text-xs font-semibold z-10 transition-all cursor-pointer"
+          title="Reexibir todas as peças ocultas"
+        >
+          <span>👁 Mostrar Ocultas ({parts.filter((p) => p.hidden).length})</span>
+        </button>
       )}
 
       {/* Dica de Teclado no Rodapé */}

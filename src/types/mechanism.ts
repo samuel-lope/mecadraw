@@ -38,6 +38,7 @@ export interface Part {
   pivots: Pivot[];
   color?: string;
   locked?: boolean;
+  hidden?: boolean; // Peça e eixos ocultos visualmente (mantém cálculo cinemático)
 }
 
 export interface Joint {

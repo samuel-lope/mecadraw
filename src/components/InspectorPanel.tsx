@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { MechanismStore } from '../state/useMechanismStore';
-import { Trash2, Copy, Link, Unlink, Plus } from 'lucide-react';
+import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff } from 'lucide-react';
 
 interface InspectorPanelProps {
   store: MechanismStore;
@@ -22,6 +22,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     togglePivotSlider,
     togglePivotTrace,
     duplicateSelected,
+    togglePartVisibility,
+    showAllParts,
     simSpeed,
   } = store;
 
@@ -74,6 +76,44 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           <span>• <b>Editar Conexões</b>: Use o painel abaixo para unir ou soltar eixos diretamente.</span>
           <span>• <b>Velocidade</b>: O controle de RPM responde instantaneamente durante a simulação.</span>
         </div>
+
+        {/* Peças Ocultas */}
+        {parts.some((p) => p.hidden) && (
+          <div className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 pt-3">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-800 dark:text-slate-100 text-[11px] uppercase tracking-wider">
+                Peças Ocultas ({parts.filter((p) => p.hidden).length})
+              </span>
+              <button
+                onClick={showAllParts}
+                className="text-[10px] text-blue-600 hover:underline font-medium"
+              >
+                Exibir Todas
+              </button>
+            </div>
+            <div className="flex flex-col gap-1">
+              {parts
+                .filter((p) => p.hidden)
+                .map((hp) => (
+                  <div
+                    key={hp.id}
+                    className="flex items-center justify-between py-1 px-2 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-xs"
+                  >
+                    <span className="font-medium text-slate-700 dark:text-slate-300">
+                      Peça {hp.letter || 'A'} ({hp.name})
+                    </span>
+                    <button
+                      onClick={() => togglePartVisibility(hp.id)}
+                      className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>Exibir</span>
+                    </button>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
       </aside>
     );
   }
@@ -95,6 +135,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           </span>
         </div>
         <div className="flex gap-1.5 mt-2">
+          <button
+            onClick={() => togglePartVisibility(selPart.id)}
+            className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium transition-colors"
+            title="Ocultar Peça e Eixos (H)"
+          >
+            <EyeOff className="w-3 h-3" />
+            <span>Ocultar</span>
+          </button>
           <button
             onClick={duplicateSelected}
             className="flex-1 flex items-center justify-center gap-1 py-1 px-2 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-medium transition-colors"
@@ -447,6 +495,43 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
         <p className="text-slate-400 italic text-[11px]">
           Clique em um eixo acima para editar identificador, motor ou conexões.
         </p>
+      )}
+      {/* Peças Ocultas */}
+      {parts.some((p) => p.hidden) && (
+        <div className="flex flex-col gap-1.5 border-t border-slate-100 dark:border-slate-800 pt-3">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-slate-800 dark:text-slate-100 text-[11px] uppercase tracking-wider">
+              Peças Ocultas ({parts.filter((p) => p.hidden).length})
+            </span>
+            <button
+              onClick={showAllParts}
+              className="text-[10px] text-blue-600 hover:underline font-medium"
+            >
+              Exibir Todas
+            </button>
+          </div>
+          <div className="flex flex-col gap-1">
+            {parts
+              .filter((p) => p.hidden)
+              .map((hp) => (
+                <div
+                  key={hp.id}
+                  className="flex items-center justify-between py-1 px-2 bg-slate-100 dark:bg-slate-800 rounded border border-slate-200 dark:border-slate-700 text-xs"
+                >
+                  <span className="font-medium text-slate-700 dark:text-slate-300">
+                    Peça {hp.letter || 'A'} ({hp.name})
+                  </span>
+                  <button
+                    onClick={() => togglePartVisibility(hp.id)}
+                    className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    <Eye className="w-3 h-3" />
+                    <span>Exibir</span>
+                  </button>
+                </div>
+              ))}
+          </div>
+        </div>
       )}
     </aside>
   );
