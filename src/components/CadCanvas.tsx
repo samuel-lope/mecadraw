@@ -287,14 +287,22 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     });
 
     // 5. Juntas Conectadas (Indicadores Visuais Claros)
-    joints.forEach((j, jIdx) => {
+    joints.forEach((j) => {
       let p1Pos: Point2D | null = null;
       let p2Pos: Point2D | null = null;
+      let p1Label = '';
+      let p2Label = '';
 
       for (const p of parts) {
         for (const pv of p.pivots) {
-          if (pv.id === j.p1) p1Pos = pivotWorldPos(p, pv);
-          if (pv.id === j.p2) p2Pos = pivotWorldPos(p, pv);
+          if (pv.id === j.p1) {
+            p1Pos = pivotWorldPos(p, pv);
+            p1Label = pv.label || 'P1';
+          }
+          if (pv.id === j.p2) {
+            p2Pos = pivotWorldPos(p, pv);
+            p2Label = pv.label || 'P2';
+          }
         }
       }
 
@@ -333,18 +341,22 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.arc(s1.x, s1.y, 11, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Badge com número da junta J1, J2
-        const badgeX = s1.x + 12;
-        const badgeY = s1.y - 14;
+        // Badge de equivalência direta dos eixos unidos (ex: A2=B1)
+        const badgeText = `${p1Label}=${p2Label}`;
+        ctx.font = 'bold 9px monospace';
+        const badgeWidth = Math.max(36, ctx.measureText(badgeText).width + 8);
+        const badgeHeight = 15;
+        const badgeX = s1.x + 10;
+        const badgeY = s1.y - 18;
+
         ctx.fillStyle = isJointHovered ? '#f59e0b' : '#2563eb';
         ctx.beginPath();
-        ctx.roundRect(badgeX, badgeY, 24, 14, 3);
+        ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 3);
         ctx.fill();
 
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 9px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText(`J${jIdx + 1}`, badgeX + 12, badgeY + 10);
+        ctx.fillText(badgeText, badgeX + badgeWidth / 2, badgeY + 11);
       }
     });
 

@@ -27,6 +27,7 @@ export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon';
 
 export interface Part {
   id: number;
+  letter?: string; // Letra identificadora sequencial (ex: A, B, C)
   name: string;
   type: PartType;
   x: number; // Posição global X do centro (mm)

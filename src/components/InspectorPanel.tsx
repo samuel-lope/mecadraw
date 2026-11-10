@@ -52,7 +52,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           for (const p of parts) {
             for (const pv of p.pivots) {
               if (pv.id === partnerId) {
-                partnerInfo = `${p.name} (${pv.label || 'Eixo ' + (p.pivots.indexOf(pv) + 1)})`;
+                partnerInfo = `Peça ${p.letter || 'A'} (${pv.label})`;
               }
             }
           }
@@ -83,12 +83,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
       {/* Cabeçalho da Peça */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <input
-            type="text"
-            value={selPart.name}
-            onChange={(e) => updatePart(selPart.id, (p) => ({ ...p, name: e.target.value }))}
-            className="font-bold text-sm bg-transparent border-b border-transparent hover:border-slate-300 dark:hover:border-slate-600 focus:border-blue-500 outline-none text-slate-900 dark:text-slate-50 w-full mr-2"
-          />
+          <div className="flex items-center gap-1.5 font-bold text-sm text-slate-900 dark:text-slate-50">
+            <span className="w-5 h-5 rounded bg-blue-600 text-white flex items-center justify-center font-mono text-xs font-bold">
+              {selPart.letter || 'A'}
+            </span>
+            <span>Peça {selPart.letter || 'A'}</span>
+            <span className="text-slate-400 font-normal text-xs">({selPart.name})</span>
+          </div>
           <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
             {selPart.type}
           </span>
@@ -413,14 +414,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                     className="flex-1 text-[11px] p-1 bg-slate-50 dark:bg-slate-750 border border-slate-200 dark:border-slate-700 rounded outline-none"
                   >
                     <option value="">Selecione eixo...</option>
-                    {otherPivots.map(({ part, pivot }) => {
-                      const pLabel = pivot.label || `${part.name.charAt(0).toUpperCase()}${part.pivots.indexOf(pivot) + 1}`;
-                      return (
-                        <option key={pivot.id} value={pivot.id}>
-                          {part.name} — {pLabel}
-                        </option>
-                      );
-                    })}
+                    {otherPivots.map(({ part, pivot }) => (
+                      <option key={pivot.id} value={pivot.id}>
+                        {pivot.label} (Peça {part.letter || 'A'})
+                      </option>
+                    ))}
                   </select>
                   <button
                     onClick={() => {

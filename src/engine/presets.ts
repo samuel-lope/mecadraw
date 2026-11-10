@@ -1,4 +1,5 @@
 import { Joint, Part } from '../types/mechanism';
+import { syncPartsAndPivots } from './naming';
 
 let nextId = 100;
 
@@ -89,7 +90,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: '4-Barras (Crank-Rocker)',
       description: 'Mecanismo clássico de Grashof com manivela motora contínua e balancim oscilante com curva de acoplamento.',
-      parts: [crank, coupler, rocker],
+      parts: syncPartsAndPivots([crank, coupler, rocker]),
       joints,
     };
   },
@@ -150,7 +151,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: 'Biela-Manivela (Slider-Crank)',
       description: 'Converte movimento rotativo contínuo em movimento linear alternativo via guia prismática (slider).',
-      parts: [crank, rod, piston],
+      parts: syncPartsAndPivots([crank, rod, piston]),
       joints,
     };
   },
@@ -187,7 +188,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: 'Ligação Lambda de Chebyshev',
       description: 'Mecanismo de 4 barras sintetizado para produzir um traço quase perfeitamente retilíneo.',
-      parts: [link1, coupler, link2],
+      parts: syncPartsAndPivots([link1, coupler, link2]),
       joints,
     };
   },
@@ -219,7 +220,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: 'Pantógrafo / Duplo Paralelogramo',
       description: 'Mecanismo pantográfico para cópia proporcional e escalonamento de curvas geométricas.',
-      parts: [barOA, barAB, barBC, barBD],
+      parts: syncPartsAndPivots([barOA, barAB, barBC, barBD]),
       joints,
     };
   },
@@ -273,7 +274,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: 'Retorno Rápido (Quick-Return)',
       description: 'Mecanismo de curso de trabalho lento e retorno veloz usado em plainas limadoras.',
-      parts: [crank, slottedArm, coupler, ram],
+      parts: syncPartsAndPivots([crank, slottedArm, coupler, ram]),
       joints,
     };
   },
@@ -305,7 +306,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     return {
       name: 'Perna de Theo Jansen (Strandbeest)',
       description: 'Mecanismo cinemático de 8 barras projetado para marcha suave e contato plano com o solo.',
-      parts: [crank, link1, link2, legTip],
+      parts: syncPartsAndPivots([crank, link1, link2, legTip]),
       joints,
     };
   },

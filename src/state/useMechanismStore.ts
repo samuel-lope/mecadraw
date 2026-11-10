@@ -13,6 +13,7 @@ import {
 import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
 import { pivotWorldPos } from '../engine/geometry';
+import { syncPartsAndPivots } from '../engine/naming';
 
 export interface MechanismStateSnapshot {
   parts: Part[];
@@ -163,7 +164,7 @@ export const useMechanismStore = () => {
   const addPart = useCallback(
     (newPart: Part) => {
       recordSnapshot();
-      setParts((prev) => [...prev, newPart]);
+      setParts((prev) => syncPartsAndPivots([...prev, newPart]));
       setSelection({ partId: newPart.id });
     },
     [recordSnapshot]
@@ -183,7 +184,7 @@ export const useMechanismStore = () => {
       if (!target) return;
       const pivotIds = target.pivots.map((v) => v.id);
 
-      setParts((prev) => prev.filter((p) => p.id !== partId));
+      setParts((prev) => syncPartsAndPivots(prev.filter((p) => p.id !== partId)));
       setJoints((prev) => prev.filter((j) => !pivotIds.includes(j.p1) && !pivotIds.includes(j.p2)));
       setSelection({});
     },
@@ -195,13 +196,15 @@ export const useMechanismStore = () => {
       recordSnapshot();
       const newPivotId = Date.now() + Math.floor(Math.random() * 1000);
       setParts((prev) =>
-        prev.map((p) => {
-          if (p.id !== partId) return p;
-          return {
-            ...p,
-            pivots: [...p.pivots, { id: newPivotId, lx, ly }],
-          };
-        })
+        syncPartsAndPivots(
+          prev.map((p) => {
+            if (p.id !== partId) return p;
+            return {
+              ...p,
+              pivots: [...p.pivots, { id: newPivotId, lx, ly }],
+            };
+          })
+        )
       );
       setSelection({ partId, pivotId: newPivotId });
     },
@@ -212,14 +215,16 @@ export const useMechanismStore = () => {
     (partId: number, pivotId: number) => {
       recordSnapshot();
       setParts((prev) =>
-        prev.map((p) => {
-          if (p.id !== partId) return p;
-          if (p.pivots.length <= 1) return p;
-          return {
-            ...p,
-            pivots: p.pivots.filter((v) => v.id !== pivotId),
-          };
-        })
+        syncPartsAndPivots(
+          prev.map((p) => {
+            if (p.id !== partId) return p;
+            if (p.pivots.length <= 1) return p;
+            return {
+              ...p,
+              pivots: p.pivots.filter((v) => v.id !== pivotId),
+            };
+          })
+        )
       );
       setJoints((prev) => prev.filter((j) => j.p1 !== pivotId && j.p2 !== pivotId));
       setSelection({ partId });
@@ -372,7 +377,7 @@ export const useMechanismStore = () => {
       pv.motor = false;
     });
 
-    setParts((prev) => [...prev, clone]);
+    setParts((prev) => syncPartsAndPivots([...prev, clone]));
     setSelection({ partId: clone.id });
   }, [selection.partId, parts, recordSnapshot]);
 
