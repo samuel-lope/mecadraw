@@ -16,7 +16,7 @@ export interface SimMotor {
   center: Point2D;
   targetId: number;
   radius: number;
-  initialAngle: number;
+  currentAngle: number;
   rpm: number;
   dir: 1 | -1;
 }
@@ -96,8 +96,8 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
           center: { x: cPos.x, y: cPos.y },
           targetId: otherPivot.id,
           radius: r,
-          initialAngle: a0,
-          rpm: mPivot.motorRpm ?? 60,
+          currentAngle: a0,
+          rpm: mPivot.motorRpm || 0, // 0 = usa globalSpeedRpm do slider
           dir: mPivot.motorDir ?? 1,
         });
       }
@@ -133,16 +133,16 @@ export const stepSimulation = (
 ): void => {
   sim.time += dt;
 
-  // 1. Atualizar partículas acionadas por motor
+  // 1. Atualizar partículas acionadas por motor com integração incremental suave
   for (const motor of sim.motors) {
-    const rpm = motor.rpm || globalSpeedRpm;
-    const omega = (rpm * 2 * Math.PI) / 60 * motor.dir * globalDir;
-    const curAngle = motor.initialAngle + omega * sim.time;
+    const rpm = motor.rpm > 0 ? motor.rpm : globalSpeedRpm;
+    const omega = ((rpm * 2 * Math.PI) / 60) * motor.dir * globalDir;
+    motor.currentAngle += omega * dt;
 
     const targetPart = sim.particles[motor.targetId];
     if (targetPart) {
-      targetPart.x = motor.center.x + motor.radius * Math.cos(curAngle);
-      targetPart.y = motor.center.y + motor.radius * Math.sin(curAngle);
+      targetPart.x = motor.center.x + motor.radius * Math.cos(motor.currentAngle);
+      targetPart.y = motor.center.y + motor.radius * Math.sin(motor.currentAngle);
       targetPart.fixed = true; // Fixa como mestre durante a iteração de relaxação
     }
   }

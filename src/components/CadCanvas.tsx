@@ -19,6 +19,14 @@ interface CadCanvasProps {
   store: MechanismStore;
 }
 
+interface ConnectedBarInfo {
+  partId: number;
+  movingPivotId: number;
+  isSecondPivot: boolean;
+  anchorWorld: Point2D;
+  extraPivots: { id: number; relRatio: number; perpDist: number }[];
+}
+
 export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -27,7 +35,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     mode:
       | 'pan'
       | 'dragPart'
-      | 'dragPivot'
+      | 'dragPivotCluster'
       | 'rotatePart'
       | 'endpointDrag'
       | 'drawLink'
@@ -36,12 +44,14 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     startWorld: Point2D;
     initialPartPos?: Point2D;
     initialPartRot?: number;
-    initialPivotPos?: Point2D;
     targetPart?: Part;
     targetPivot?: Pivot;
     endpointIndex?: number;
     anchorWorld?: Point2D;
     curWorld: Point2D;
+    clusterIds?: number[];
+    connectedBars?: ConnectedBarInfo[];
+    connectedOtherParts?: { partId: number; pivotId: number }[];
   } | null>(null);
 
   const [hoveredPivot, setHoveredPivot] = useState<{ part: Part; pivot: Pivot } | null>(null);
@@ -276,8 +286,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.restore();
     });
 
-    // 5. Juntas Conectadas
-    joints.forEach((j) => {
+    // 5. Juntas Conectadas (Indicadores Visuais Claros)
+    joints.forEach((j, jIdx) => {
       let p1Pos: Point2D | null = null;
       let p2Pos: Point2D | null = null;
 
@@ -293,7 +303,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         const s2 = worldToScreen(p2Pos, camera, w, h);
         const d = distance2D(s1, s2);
 
-        // Se houver desalinhamento residual durante solver, mostrar linha tracejada de advertência
+        const isJointHovered =
+          hoveredPivot?.pivot.id === j.p1 ||
+          hoveredPivot?.pivot.id === j.p2 ||
+          selection.pivotId === j.p1 ||
+          selection.pivotId === j.p2;
+
+        // Linha tracejada se houver folga
         if (d > 2) {
           ctx.strokeStyle = '#ef4444';
           ctx.lineWidth = 2;
@@ -305,17 +321,36 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           ctx.setLineDash([]);
         }
 
-        // Círculo concêntrico da junta
-        ctx.fillStyle = 'rgba(37, 99, 235, 0.25)';
+        // Halo duplo de junta conectada
+        ctx.strokeStyle = isJointHovered ? '#f59e0b' : '#3b82f6';
+        ctx.lineWidth = isJointHovered ? 2.5 : 1.8;
+        ctx.beginPath();
+        ctx.arc(s1.x, s1.y, 14, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        ctx.fillStyle = isJointHovered ? 'rgba(245, 158, 11, 0.25)' : 'rgba(37, 99, 235, 0.20)';
         ctx.beginPath();
         ctx.arc(s1.x, s1.y, 11, 0, 2 * Math.PI);
         ctx.fill();
+
+        // Badge com número da junta J1, J2
+        const badgeX = s1.x + 12;
+        const badgeY = s1.y - 14;
+        ctx.fillStyle = isJointHovered ? '#f59e0b' : '#2563eb';
+        ctx.beginPath();
+        ctx.roundRect(badgeX, badgeY, 24, 14, 3);
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`J${jIdx + 1}`, badgeX + 12, badgeY + 10);
       }
     });
 
-    // 6. Eixos / Pivôs (Fixo, Motor, Slider, Normal)
+    // 6. Eixos / Pivôs (Fixo, Motor, Slider, Rótulos de Identificação)
     parts.forEach((p) => {
-      p.pivots.forEach((pv) => {
+      p.pivots.forEach((pv, pvIdx) => {
         const wpos = pivotWorldPos(p, pv);
         const s = worldToScreen(wpos, camera, w, h);
         const isPivotSelected = selection.pivotId === pv.id;
@@ -364,6 +399,17 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           ctx.arc(s.x, s.y, 14, 0, 1.5 * Math.PI);
           ctx.stroke();
         }
+
+        // Rótulo de Identificação do Eixo (ex: A1, B2)
+        const pInitial = p.name ? p.name.charAt(0).toUpperCase() : 'P';
+        const axisLabel = pv.label || `${pInitial}${pvIdx + 1}`;
+
+        ctx.save();
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = isDark ? '#f1f5f9' : '#0f172a';
+        ctx.fillText(axisLabel, s.x, s.y - 12);
+        ctx.restore();
 
         // Destaque de seleção / hover
         if (isPivotSelected || isPivotHovered) {
@@ -469,7 +515,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     const worldPt = screenToWorld(screenPt, camera, cv.clientWidth, cv.clientHeight);
 
     // Botão do meio ou barra de espaço pressionada = Pan
-    if (e.button === 1 || e.buttons === 4 || e.altKey || e.shiftKey && e.button === 0 && tool === 'sel' && !hitPart(worldPt, parts)) {
+    if (e.button === 1 || e.buttons === 4 || e.altKey || (e.shiftKey && e.button === 0 && tool === 'sel' && !hitPart(worldPt, parts))) {
       setDragState({
         mode: 'pan',
         startScreen: screenPt,
@@ -507,21 +553,21 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         const a = w / 2 - 12;
         const b = h / 2 - 12;
         pivots = [
-          { id: Date.now() + 1, lx: -a, ly: -b },
-          { id: Date.now() + 2, lx: a, ly: -b },
-          { id: Date.now() + 3, lx: a, ly: b },
-          { id: Date.now() + 4, lx: -a, ly: b },
+          { id: Date.now() + 1, label: 'R1', lx: -a, ly: -b },
+          { id: Date.now() + 2, label: 'R2', lx: a, ly: -b },
+          { id: Date.now() + 3, label: 'R3', lx: a, ly: b },
+          { id: Date.now() + 4, label: 'R4', lx: -a, ly: b },
         ];
       } else if (tool === 'circle') {
         pivots = [
-          { id: Date.now() + 1, lx: 0, ly: 0 },
-          { id: Date.now() + 2, lx: w / 2 - 12, ly: 0 },
+          { id: Date.now() + 1, label: 'C1', lx: 0, ly: 0 },
+          { id: Date.now() + 2, label: 'C2', lx: w / 2 - 12, ly: 0 },
         ];
       } else {
         pivots = [
-          { id: Date.now() + 1, lx: -0.36 * w, ly: 0.36 * h },
-          { id: Date.now() + 2, lx: 0.36 * w, ly: 0.36 * h },
-          { id: Date.now() + 3, lx: 0, ly: -0.36 * h },
+          { id: Date.now() + 1, label: 'T1', lx: -0.36 * w, ly: 0.36 * h },
+          { id: Date.now() + 2, label: 'T2', lx: 0.36 * w, ly: 0.36 * h },
+          { id: Date.now() + 3, label: 'T3', lx: 0, ly: -0.36 * h },
         ];
       }
 
@@ -569,9 +615,12 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         recordSnapshot();
         const [lx, ly] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
         const newPivotId = Date.now();
+        const initial = clickedPart.name.charAt(0).toUpperCase();
+        const newLabel = `${initial}${clickedPart.pivots.length + 1}`;
+
         updatePart(clickedPart.id, (p) => ({
           ...p,
-          pivots: [...p.pivots, { id: newPivotId, lx, ly }],
+          pivots: [...p.pivots, { id: newPivotId, label: newLabel, lx, ly }],
         }));
         setSelection({ partId: clickedPart.id, pivotId: newPivotId });
       }
@@ -620,40 +669,75 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             });
             return;
           }
-          if (gizmoHit?.type === 'endpoint-start' || gizmoHit?.type === 'endpoint-end') {
-            recordSnapshot();
-            const endpointIndex = gizmoHit.type === 'endpoint-start' ? 0 : 1;
-            const otherIndex = endpointIndex === 0 ? 1 : 0;
-            const otherPivot = selPart.pivots[otherIndex];
-            const anchor = pivotWorldPos(selPart, otherPivot);
-
-            setDragState({
-              mode: 'endpointDrag',
-              startScreen: screenPt,
-              startWorld: worldPt,
-              targetPart: selPart,
-              endpointIndex,
-              anchorWorld: anchor,
-              curWorld: worldPt,
-            });
-            return;
-          }
         }
       }
 
-      // 2. Clicou em um pivô existente?
+      // 2. Clicou em um pivô existente? (Redimensiona barra(s) conectadas - MotionGen!)
       if (clickedPivot) {
         recordSnapshot();
         setSelection({ partId: clickedPivot.part.id, pivotId: clickedPivot.pivot.id });
+
         if (!simRunning) {
+          // Encontrar cluster de todos os pivôs conectados a este por juntas
+          const cluster = new Set<number>([clickedPivot.pivot.id]);
+          let changed = true;
+          while (changed) {
+            changed = false;
+            for (const j of joints) {
+              if (cluster.has(j.p1) && !cluster.has(j.p2)) {
+                cluster.add(j.p2);
+                changed = true;
+              } else if (cluster.has(j.p2) && !cluster.has(j.p1)) {
+                cluster.add(j.p1);
+                changed = true;
+              }
+            }
+          }
+
+          const connectedBars: ConnectedBarInfo[] = [];
+          const connectedOtherParts: { partId: number; pivotId: number }[] = [];
+
+          for (const p of parts) {
+            const matchPv = p.pivots.find((v) => cluster.has(v.id));
+            if (!matchPv) continue;
+
+            if (p.type === 'bar' && p.pivots.length >= 2) {
+              const isSecond = p.pivots[1].id === matchPv.id;
+              const anchorPv = isSecond ? p.pivots[0] : p.pivots[1];
+              const anchorWorld = pivotWorldPos(p, anchorPv);
+
+              // Preserva proporção de pivôs intermediários/acopladores
+              const extraPivots: ConnectedBarInfo['extraPivots'] = [];
+              const origLen = Math.hypot(p.pivots[1].lx - p.pivots[0].lx, p.pivots[1].ly - p.pivots[0].ly) || 1;
+              for (let i = 2; i < p.pivots.length; i++) {
+                const ep = p.pivots[i];
+                extraPivots.push({
+                  id: ep.id,
+                  relRatio: (ep.lx - p.pivots[0].lx) / origLen,
+                  perpDist: ep.ly,
+                });
+              }
+
+              connectedBars.push({
+                partId: p.id,
+                movingPivotId: matchPv.id,
+                isSecondPivot: isSecond,
+                anchorWorld,
+                extraPivots,
+              });
+            } else {
+              connectedOtherParts.push({ partId: p.id, pivotId: matchPv.id });
+            }
+          }
+
           setDragState({
-            mode: 'dragPivot',
+            mode: 'dragPivotCluster',
             startScreen: screenPt,
             startWorld: worldPt,
-            targetPart: clickedPivot.part,
-            targetPivot: clickedPivot.pivot,
-            initialPivotPos: { x: clickedPivot.pivot.lx, y: clickedPivot.pivot.ly },
             curWorld: worldPt,
+            clusterIds: Array.from(cluster),
+            connectedBars,
+            connectedOtherParts,
           });
         }
         return;
@@ -739,35 +823,65 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       return;
     }
 
-    // Arrastar Extremidade da Barra (Endpoint Drag / Stretch)
-    if (dragState.mode === 'endpointDrag' && dragState.targetPart && dragState.anchorWorld) {
-      const snap = getSnapPoint(rawWorld, parts, camera);
-      const anchor = dragState.anchorWorld;
-      const cur = snap.point;
-      const len = Math.max(20, distance2D(anchor, cur));
-      const ang = Math.atan2(cur.y - anchor.y, cur.x - anchor.x);
-      const cx = (anchor.x + cur.x) / 2;
-      const cy = (anchor.y + cur.y) / 2;
+    // Arrastar Eixo / Nó Conectado: Redimensiona e Rotaciona Todas as Barras Conectadas!
+    if (dragState.mode === 'dragPivotCluster' && dragState.connectedBars) {
+      const snap = getSnapPoint(rawWorld, parts, camera, dragState.clusterIds?.[0]);
+      const targetPos = snap.point;
 
-      updatePart(dragState.targetPart.id, (p) => {
-        const p0 = p.pivots[0];
-        const p1 = p.pivots[1];
-        if (!p0 || !p1) return p;
+      // 1. Atualizar todas as barras conectadas ao nó
+      dragState.connectedBars.forEach((bInfo) => {
+        const anchor = bInfo.anchorWorld;
+        const len = Math.max(15, distance2D(anchor, targetPos));
+        const ang = bInfo.isSecondPivot
+          ? Math.atan2(targetPos.y - anchor.y, targetPos.x - anchor.x)
+          : Math.atan2(anchor.y - targetPos.y, anchor.x - targetPos.x);
 
-        return {
-          ...p,
-          x: cx,
-          y: cy,
-          rot: ang,
-          w: len + 20,
-          pivots: [
-            { ...p0, lx: -len / 2, ly: 0 },
-            { ...p1, lx: len / 2, ly: 0 },
-          ],
-        };
+        const cx = (anchor.x + targetPos.x) / 2;
+        const cy = (anchor.y + targetPos.y) / 2;
+
+        updatePart(bInfo.partId, (p) => {
+          const newPivots = p.pivots.map((pv, idx) => {
+            if (idx === 0) return { ...pv, lx: -len / 2, ly: 0 };
+            if (idx === 1) return { ...pv, lx: len / 2, ly: 0 };
+            const ep = bInfo.extraPivots.find((x) => x.id === pv.id);
+            if (ep) {
+              return {
+                ...pv,
+                lx: -len / 2 + ep.relRatio * len,
+                ly: ep.perpDist,
+              };
+            }
+            return pv;
+          });
+
+          return {
+            ...p,
+            w: len + 20,
+            rot: ang,
+            x: cx,
+            y: cy,
+            pivots: newPivots,
+          };
+        });
       });
 
-      setDragState((prev) => (prev ? { ...prev, curWorld: cur } : null));
+      // 2. Para outras peças que não são barras (ex: slider / pistão retangular)
+      if (dragState.connectedOtherParts) {
+        dragState.connectedOtherParts.forEach((op) => {
+          updatePart(op.partId, (p) => {
+            const pv = p.pivots.find((v) => v.id === op.pivotId);
+            if (!pv) return p;
+            const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
+            return {
+              ...p,
+              x: targetPos.x - rx,
+              y: targetPos.y - ry,
+            };
+          });
+        });
+      }
+
+      setDragState((prev) => (prev ? { ...prev, curWorld: targetPos } : null));
       return;
     }
 
@@ -785,17 +899,6 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
       updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY }));
       return;
-    }
-
-    // Mover Eixo / Pivô dentro da Peça
-    if (dragState.mode === 'dragPivot' && dragState.targetPart && dragState.targetPivot) {
-      const p = dragState.targetPart;
-      const [lx, ly] = rotate2D(rawWorld.x - p.x, rawWorld.y - p.y, -p.rot);
-
-      updatePart(p.id, (part) => ({
-        ...part,
-        pivots: part.pivots.map((pv) => (pv.id === dragState.targetPivot?.id ? { ...pv, lx, ly } : pv)),
-      }));
     }
   };
 
@@ -956,7 +1059,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         {tool === 'bar'
           ? 'Clique e arraste para desenhar uma barra (conecta automaticamente se soltar sobre eixos).'
           : tool === 'sel'
-          ? 'Clique e arraste para mover peças ou eixos. Alça azul gira a peça. Barra de espaço + arraste faz Pan.'
+          ? 'Arraste qualquer eixo/junta para ajustar o comprimento e rotação da barra em tempo real.'
           : tool === 'joint'
           ? 'Clique em dois eixos de peças distintas para uni-los por junta revoluta.'
           : 'Clique sobre a peça ou eixo desejado.'}

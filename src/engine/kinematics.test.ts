@@ -50,4 +50,26 @@ describe('Kinematics Engine', () => {
     const piston = parts.find(p => p.type === 'rect')!;
     expect(Math.abs(piston.y)).toBeLessThan(0.1);
   });
+
+  it('supports dynamic motor speed adjustment smoothly during simulation', () => {
+    const { parts, joints } = PRESETS.fourBar();
+    const sim = createSimulation(parts, joints);
+    const trails = {};
+    const telemetry = {};
+
+    // 10 passos a 60 RPM
+    for (let i = 0; i < 10; i++) {
+      stepSimulation(sim, parts, 0.016, 60, 1, trails, telemetry);
+    }
+    const angle1 = sim.motors[0].currentAngle;
+
+    // Aumentar para 180 RPM dinamicamente
+    for (let i = 0; i < 10; i++) {
+      stepSimulation(sim, parts, 0.016, 180, 1, trails, telemetry);
+    }
+    const angle2 = sim.motors[0].currentAngle;
+
+    expect(angle2).toBeGreaterThan(angle1);
+    expect(sim.lockedUp).toBe(false);
+  });
 });

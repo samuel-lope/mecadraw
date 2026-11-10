@@ -11,6 +11,7 @@ export interface SliderGuide {
 
 export interface Pivot {
   id: number;
+  label?: string; // Identificador legível (ex: A1, B2)
   lx: number; // Posição local X (mm)
   ly: number; // Posição local Y (mm)
   fixed?: boolean; // Apoio fixo / Terra

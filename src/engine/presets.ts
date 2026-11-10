@@ -8,7 +8,8 @@ export const createBar = (
   x2: number,
   y2: number,
   name = 'Barra',
-  thickness = 16
+  thickness = 16,
+  labelPrefix?: string
 ): Part => {
   const len = Math.hypot(x2 - x1, y2 - y1);
   const ang = Math.atan2(y2 - y1, x2 - x1);
@@ -17,6 +18,7 @@ export const createBar = (
 
   const p1Id = ++nextId;
   const p2Id = ++nextId;
+  const prefix = labelPrefix || name.charAt(0).toUpperCase();
 
   return {
     id: ++nextId,
@@ -28,8 +30,8 @@ export const createBar = (
     w: len + 20,
     h: thickness,
     pivots: [
-      { id: p1Id, lx: -len / 2, ly: 0 },
-      { id: p2Id, lx: len / 2, ly: 0 },
+      { id: p1Id, label: `${prefix}1`, lx: -len / 2, ly: 0 },
+      { id: p2Id, label: `${prefix}2`, lx: len / 2, ly: 0 },
     ],
   };
 };
@@ -60,22 +62,23 @@ export const PRESETS: Record<string, () => PresetData> = {
     const py = B.y + (a * dy) / d;
     const C = { x: px + (h * dy) / d, y: py - (h * dx) / d };
 
-    const crank = createBar(A.x, A.y, B.x, B.y, 'Manivela (Crank)');
+    const crank = createBar(A.x, A.y, B.x, B.y, 'Manivela (Crank)', 16, 'M');
     crank.pivots[0].fixed = true;
     crank.pivots[0].motor = true;
 
-    const coupler = createBar(B.x, B.y, C.x, C.y, 'Biela/Acoplador (Coupler)');
+    const coupler = createBar(B.x, B.y, C.x, C.y, 'Biela/Acoplador (Coupler)', 16, 'A');
     // Adicionar ponto traçador na biela
     const tracePivotId = ++nextId;
     coupler.pivots.push({
       id: tracePivotId,
+      label: 'A3',
       lx: 0,
       ly: -45,
       trace: true,
       traceColor: '#a855f7',
     });
 
-    const rocker = createBar(D.x, D.y, C.x, C.y, 'Balancim (Rocker)');
+    const rocker = createBar(D.x, D.y, C.x, C.y, 'Balancim (Rocker)', 16, 'B');
     rocker.pivots[0].fixed = true;
 
     const joints: Joint[] = [

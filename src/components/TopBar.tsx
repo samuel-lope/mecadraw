@@ -96,18 +96,20 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
           {simDir === 1 ? '↻ Horário' : '↺ Anti-horário'}
         </button>
 
-        {/* Controle de Velocidade */}
-        <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 ml-1">
-          <span className="text-[11px] text-slate-400 font-mono">{simSpeed} RPM</span>
+        {/* Controle de Velocidade do Motor */}
+        <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 ml-1 bg-slate-100 dark:bg-slate-800/80 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700">
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono font-semibold w-14 text-center">
+            {simSpeed} RPM
+          </span>
           <input
             type="range"
             min="10"
-            max="240"
+            max="300"
             step="5"
             value={simSpeed}
             onChange={(e) => setSimSpeed(Number(e.target.value))}
-            className="w-20 accent-blue-600 h-1 bg-slate-200 dark:bg-slate-700 rounded-lg cursor-pointer"
-            title="Velocidade angular do motor em RPM"
+            className="w-20 sm:w-28 accent-blue-600 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg cursor-pointer"
+            title="Velocidade angular do motor (10 - 300 RPM)"
           />
         </div>
       </div>
