@@ -166,4 +166,20 @@ describe('Kinematics Engine', () => {
     expect(bar.pivots[0].ly).toBe(0);
     expect(bar.pivots[1].ly).toBe(0);
   });
+
+  it('runs quick-return preset with genuine pin-in-slot linkage', () => {
+    const { parts, joints } = PRESETS.quickReturn();
+    const sim = createSimulation(parts, joints);
+
+    expect(sim.pinInSlots.length).toBe(1);
+
+    const trails = {};
+    const telemetry = {};
+
+    for (let i = 0; i < 40; i++) {
+      stepSimulation(sim, parts, 0.016, 60, 1, trails, telemetry);
+      expect(sim.lockedUp).toBe(false);
+      expect(sim.errorResidual).toBeLessThan(1.0);
+    }
+  });
 });

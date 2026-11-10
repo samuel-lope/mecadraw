@@ -239,6 +239,18 @@ export const PRESETS: Record<string, () => PresetData> = {
 
     const slottedArm = createBar(O4.x, O4.y, B.x, B.y, 'Braço Oscilante');
     slottedArm.pivots[0].fixed = true;
+    const slotId = ++nextId;
+    slottedArm.slots = [
+      {
+        id: slotId,
+        lx: 0,
+        ly: 0,
+        length: 160,
+        angle: 0,
+        width: 14,
+        closedEnds: false,
+      },
+    ];
 
     const coupler = createBar(B.x, B.y, C.x, C.y, 'Biela de Saída');
     coupler.pivots[1].trace = true;
@@ -266,7 +278,7 @@ export const PRESETS: Record<string, () => PresetData> = {
     };
 
     const joints: Joint[] = [
-      { id: ++nextId, p1: crank.pivots[1].id, p2: slottedArm.pivots[1].id },
+      { id: ++nextId, p1: crank.pivots[1].id, slotId, type: 'pin-in-slot' },
       { id: ++nextId, p1: slottedArm.pivots[1].id, p2: coupler.pivots[0].id },
       { id: ++nextId, p1: coupler.pivots[1].id, p2: ramPivotId },
     ];
