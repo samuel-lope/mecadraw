@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeMechanism, createSimulation, stepSimulation } from './kinematics';
 import { createBar, PRESETS } from './presets';
+import { TrailPoint } from '../types/mechanism';
 
 describe('Kinematics Engine', () => {
   it('correctly calculates DOF and Grashof for a four-bar linkage', () => {
@@ -17,7 +18,7 @@ describe('Kinematics Engine', () => {
   it('initializes and steps four-bar simulation without exploding', () => {
     const { parts, joints } = PRESETS.fourBar();
     const sim = createSimulation(parts, joints);
-    const trails = {};
+    const trails: Record<number, TrailPoint[]> = {};
     const telemetry = {};
 
     expect(sim.motors.length).toBe(1);
@@ -54,7 +55,7 @@ describe('Kinematics Engine', () => {
   it('supports dynamic motor speed adjustment smoothly during simulation', () => {
     const { parts, joints } = PRESETS.fourBar();
     const sim = createSimulation(parts, joints);
-    const trails = {};
+    const trails: Record<number, TrailPoint[]> = {};
     const telemetry = {};
 
     // 10 passos a 60 RPM
@@ -181,5 +182,29 @@ describe('Kinematics Engine', () => {
       expect(sim.lockedUp).toBe(false);
       expect(sim.errorResidual).toBeLessThan(1.0);
     }
+  });
+
+  it('manages temporary trail lifespan according to configured duration', () => {
+    const { parts, joints } = PRESETS.fourBar();
+    const sim = createSimulation(parts, joints);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry = {};
+
+    const dt = 0.05;
+    const trailDuration = 1.0;
+
+    for (let i = 0; i < 40; i++) {
+      stepSimulation(sim, parts, dt, 60, 1, trails, telemetry, trailDuration);
+    }
+
+    const tracedPivotId = parts.flatMap((p) => p.pivots).find((pv) => pv.trace)?.id;
+    expect(tracedPivotId).toBeDefined();
+
+    const pts = trails[tracedPivotId!];
+    expect(pts.length).toBeGreaterThan(5);
+
+    const oldest = pts[0];
+    const newest = pts[pts.length - 1];
+    expect(newest.time - oldest.time).toBeLessThanOrEqual(trailDuration + dt * 2);
   });
 });

@@ -6,10 +6,10 @@ import {
   Part,
   PartSlot,
   Pivot,
-  Point2D,
   SelectionState,
   TelemetrySample,
   ToolType,
+  TrailPoint,
 } from '../types/mechanism';
 import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
@@ -41,6 +41,7 @@ export const useMechanismStore = () => {
     snapToPivots: true,
     showDimensions: true,
     showTrails: true,
+    trailDuration: 3.0, // 3 segundos de fade-out
     showVectors: false,
   });
 
@@ -51,8 +52,15 @@ export const useMechanismStore = () => {
   const [simLockedUp, setSimLockedUp] = useState<boolean>(false);
 
   // Trajetórias e telemetria
-  const [trails, setTrails] = useState<Record<number, Point2D[]>>({});
+  const [trails, setTrails] = useState<Record<number, TrailPoint[]>>({});
   const [telemetry, setTelemetry] = useState<Record<number, TelemetrySample[]>>({});
+  const [telemetryHoverPoint, setTelemetryHoverPoint] = useState<{
+    x: number;
+    y: number;
+    time: number;
+    value: number;
+    label: string;
+  } | null>(null);
 
   // Análise mecânica (DOF, Grashof)
   const [analysis, setAnalysis] = useState<MechanismAnalysis>(() =>
@@ -154,11 +162,12 @@ export const useMechanismStore = () => {
         simSpeed,
         simDir,
         trails,
-        telemetry
+        telemetry,
+        camera.trailDuration
       );
       setSimLockedUp(simInstanceRef.current.lockedUp);
     },
-    [parts, joints, simSpeed, simDir, trails, telemetry]
+    [parts, joints, simSpeed, simDir, trails, telemetry, camera.trailDuration]
   );
 
   // Ações de Peças e Juntas
@@ -458,6 +467,7 @@ export const useMechanismStore = () => {
               ...v,
               trace: !v.trace,
               traceColor: v.traceColor || '#a855f7',
+              traceDuration: v.traceDuration !== undefined ? v.traceDuration : 3.0,
             };
           }),
         }))
@@ -465,6 +475,21 @@ export const useMechanismStore = () => {
     },
     [recordSnapshot]
   );
+
+  const setPivotTraceDuration = useCallback((pivotId: number, duration: number) => {
+    setParts((prev) =>
+      prev.map((p) => ({
+        ...p,
+        pivots: p.pivots.map((v) => {
+          if (v.id !== pivotId) return v;
+          return {
+            ...v,
+            traceDuration: duration,
+          };
+        }),
+      }))
+    );
+  }, []);
 
   // Duplicar Peça
   const duplicateSelected = useCallback(() => {
@@ -691,6 +716,9 @@ export const useMechanismStore = () => {
     togglePivotMotor,
     togglePivotSlider,
     togglePivotTrace,
+    setPivotTraceDuration,
+    telemetryHoverPoint,
+    setTelemetryHoverPoint,
     duplicateSelected,
     togglePartVisibility,
     showAllParts,

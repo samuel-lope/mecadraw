@@ -1,4 +1,12 @@
-import { Joint, MechanismAnalysis, Part, PartSlot, Point2D, TelemetrySample } from '../types/mechanism';
+import {
+  Joint,
+  MechanismAnalysis,
+  Part,
+  PartSlot,
+  Point2D,
+  TelemetrySample,
+  TrailPoint,
+} from '../types/mechanism';
 import { distance2D, pivotWorldPos, rotate2D } from './geometry';
 
 export interface SimParticle {
@@ -174,8 +182,9 @@ export const stepSimulation = (
   dt: number,
   globalSpeedRpm: number,
   globalDir: 1 | -1,
-  trails: Record<number, Point2D[]>,
-  telemetryHistory: Record<number, TelemetrySample[]>
+  trails: Record<number, TrailPoint[]>,
+  telemetryHistory: Record<number, TelemetrySample[]>,
+  defaultTrailDuration = 3.0
 ): void => {
   sim.time += dt;
 
@@ -426,8 +435,17 @@ export const stepSimulation = (
 
       const currentPos = pivotWorldPos(part, pivot);
       const trail = trails[pivot.id] || (trails[pivot.id] = []);
-      trail.push(currentPos);
-      if (trail.length > 1000) trail.shift();
+      trail.push({ x: currentPos.x, y: currentPos.y, time: sim.time });
+
+      const duration = pivot.traceDuration !== undefined ? pivot.traceDuration : defaultTrailDuration;
+      if (duration > 0) {
+        const cutoffTime = sim.time - duration;
+        while (trail.length > 2 && trail[0].time < cutoffTime) {
+          trail.shift();
+        }
+      } else if (trail.length > 2000) {
+        trail.shift();
+      }
 
       const telemetry = telemetryHistory[pivot.id] || (telemetryHistory[pivot.id] = []);
       const prev = telemetry[telemetry.length - 1];

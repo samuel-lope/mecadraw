@@ -3,6 +3,12 @@ export interface Point2D {
   y: number;
 }
 
+export interface TrailPoint {
+  x: number;
+  y: number;
+  time: number;
+}
+
 export interface SliderGuide {
   enabled: boolean;
   angle: number; // Radianos relativos ao mundo ou à peça
@@ -31,6 +37,7 @@ export interface Pivot {
   motorDir?: 1 | -1;
   trace?: boolean; // Traçar trajetória da curva de acoplamento
   traceColor?: string;
+  traceDuration?: number; // Duração do rastro em segundos (se undefined, usa camera.trailDuration; 0 = infinito)
   slider?: SliderGuide; // Junta prismática (guia linear)
 }
 
@@ -85,6 +92,7 @@ export interface Camera {
   snapToPivots: boolean;
   showDimensions: boolean;
   showTrails: boolean;
+  trailDuration: number; // Duração global do rastro em segundos (padrão 3.0s, 0 = infinito)
   showVectors: boolean;
 }
 

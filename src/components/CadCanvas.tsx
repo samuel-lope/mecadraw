@@ -29,6 +29,22 @@ interface ConnectedBarInfo {
   extraPivots: { id: number; relRatio: number; perpDist: number }[];
 }
 
+const hexToRgb = (hex: string): [number, number, number] => {
+  const clean = hex.replace('#', '');
+  if (clean.length === 3) {
+    return [
+      parseInt(clean[0] + clean[0], 16),
+      parseInt(clean[1] + clean[1], 16),
+      parseInt(clean[2] + clean[2], 16),
+    ];
+  }
+  return [
+    parseInt(clean.slice(0, 2), 16) || 168,
+    parseInt(clean.slice(2, 4), 16) || 85,
+    parseInt(clean.slice(4, 6), 16) || 247,
+  ];
+};
+
 export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -72,6 +88,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     simRunning,
     stepSim,
     trails,
+    telemetryHoverPoint,
     recordSnapshot,
     addPart,
     updatePart,
@@ -110,7 +127,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [simRunning, stepSim, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot]);
+  }, [simRunning, stepSim, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot, telemetryHoverPoint]);
 
   // Função Principal de Renderização
   const drawCanvas = useCallback(() => {
@@ -186,25 +203,91 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     ctx.lineTo(w, originScreen.y);
     ctx.stroke();
 
-    // 2. Trajetórias (Coupler Curves)
+    // 2. Trajetórias com Fade-Out Suave (Coupler Curves)
     if (camera.showTrails) {
       for (const pId in trails) {
         const pts = trails[pId];
         if (!pts || pts.length < 2) continue;
 
         const pivotOwner = parts.flatMap((p) => p.pivots).find((pv) => pv.id === Number(pId));
-        ctx.strokeStyle = pivotOwner?.traceColor || '#a855f7';
+        const [r, g, b] = hexToRgb(pivotOwner?.traceColor || '#a855f7');
+        const latestTime = pts[pts.length - 1].time;
+        const duration =
+          pivotOwner?.traceDuration !== undefined
+            ? pivotOwner.traceDuration
+            : camera.trailDuration;
+
         ctx.lineWidth = 2.5;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.beginPath();
-        pts.forEach((pt, idx) => {
-          const s = worldToScreen(pt, camera, w, h);
-          if (idx === 0) ctx.moveTo(s.x, s.y);
-          else ctx.lineTo(s.x, s.y);
-        });
-        ctx.stroke();
+
+        if (duration <= 0) {
+          // Modo Permanente (Sem fade-out)
+          ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
+          ctx.beginPath();
+          pts.forEach((pt, idx) => {
+            const s = worldToScreen(pt, camera, w, h);
+            if (idx === 0) ctx.moveTo(s.x, s.y);
+            else ctx.lineTo(s.x, s.y);
+          });
+          ctx.stroke();
+        } else {
+          // Desvanecimento Suave (Fade-Out temporal)
+          for (let i = 0; i < pts.length - 1; i++) {
+            const p0 = pts[i];
+            const p1 = pts[i + 1];
+            const age = latestTime - p1.time;
+            const alpha = Math.max(0.04, Math.min(0.95, 1 - age / duration));
+            const s0 = worldToScreen(p0, camera, w, h);
+            const s1 = worldToScreen(p1, camera, w, h);
+
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(2)})`;
+            ctx.beginPath();
+            ctx.moveTo(s0.x, s0.y);
+            ctx.lineTo(s1.x, s1.y);
+            ctx.stroke();
+          }
+        }
       }
+    }
+
+    // 2.1 Ponto Sincronizado de Telemetria (Hover no Gráfico de Onda)
+    if (telemetryHoverPoint) {
+      const s = worldToScreen(telemetryHoverPoint, camera, w, h);
+      ctx.save();
+      // Anel duplo de destaque
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 9, 0, 2 * Math.PI);
+      ctx.stroke();
+
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.35)';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+
+      // Retícula de precisão
+      ctx.beginPath();
+      ctx.moveTo(s.x - 14, s.y);
+      ctx.lineTo(s.x + 14, s.y);
+      ctx.moveTo(s.x, s.y - 14);
+      ctx.lineTo(s.x, s.y + 14);
+      ctx.stroke();
+
+      // Tooltip flutuante com dados cinemáticos
+      const tipText = `${telemetryHoverPoint.label}: ${telemetryHoverPoint.value.toFixed(1)} @ ${telemetryHoverPoint.time.toFixed(2)}s`;
+      ctx.font = 'bold 10px monospace';
+      const tipW = ctx.measureText(tipText).width + 8;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.beginPath();
+      ctx.roundRect(s.x - tipW / 2, s.y - 28, tipW, 16, 4);
+      ctx.fill();
+      ctx.fillStyle = '#38bdf8';
+      ctx.textAlign = 'center';
+      ctx.fillText(tipText, s.x, s.y - 16);
+
+      ctx.restore();
     }
 
     // 3. Trilhas de Guias Lineares (Sliders)
@@ -653,7 +736,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       );
       ctx.restore();
     }
-  }, [camera, parts, joints, selection, trails, dragState, hoveredPivot, hoveredPart, pendingJointPivot, simRunning]);
+  }, [camera, parts, joints, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot, telemetryHoverPoint, simRunning]);
 
   // Pointer Event Handlers
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {

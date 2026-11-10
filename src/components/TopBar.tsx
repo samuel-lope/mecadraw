@@ -13,6 +13,7 @@ import {
   Eye,
   Grid,
   Magnet,
+  Sparkles,
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -218,6 +219,36 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
         >
           <Eye className="w-3.5 h-3.5" />
         </button>
+
+        {/* Trajetórias e Duração do Rastro */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setCamera((c) => ({ ...c, showTrails: !c.showTrails }))}
+            className={`p-1.5 rounded text-xs transition-colors ${
+              camera.showTrails
+                ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+                : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+            title="Exibir Trajetórias (Curvas de Acoplamento)"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+          </button>
+          {camera.showTrails && (
+            <select
+              value={camera.trailDuration}
+              onChange={(e) => setCamera((c) => ({ ...c, trailDuration: parseFloat(e.target.value) }))}
+              className="text-[11px] font-mono bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5 outline-none cursor-pointer"
+              title="Duração do rastro com fade-out temporal"
+            >
+              <option value="1">1s</option>
+              <option value="2">2s</option>
+              <option value="3">3s</option>
+              <option value="5">5s</option>
+              <option value="8">8s</option>
+              <option value="0">Infinito</option>
+            </select>
+          )}
+        </div>
 
         <button
           onClick={() => setCamera((c) => ({ ...c, x: 0, y: 0, zoom: 1.2 }))}

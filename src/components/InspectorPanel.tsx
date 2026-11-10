@@ -611,6 +611,36 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               />
               <span>Traçar Curva de Acoplamento (✎)</span>
             </label>
+
+            {selPivot.trace && (
+              <div className="pl-5 flex flex-col gap-1 py-1 px-1.5 bg-purple-50/50 dark:bg-purple-950/20 rounded border border-purple-200/50 dark:border-purple-900/50">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-purple-800 dark:text-purple-300 font-medium">Duração do Rastro:</span>
+                  <span className="font-mono font-semibold text-purple-700 dark:text-purple-300">
+                    {(selPivot.traceDuration ?? 3.0) === 0 ? 'Infinito' : `${(selPivot.traceDuration ?? 3.0).toFixed(1)}s`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0"
+                    max="10"
+                    step="0.5"
+                    value={selPivot.traceDuration ?? 3.0}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      updatePart(selPart.id, (p) => ({
+                        ...p,
+                        pivots: p.pivots.map((v) =>
+                          v.id === selPivot.id ? { ...v, traceDuration: val } : v
+                        ),
+                      }));
+                    }}
+                    className="w-full accent-purple-600 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg cursor-pointer"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Juntas Vinculadas com Detalhes Claros */}

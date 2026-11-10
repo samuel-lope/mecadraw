@@ -9,8 +9,9 @@ interface TelemetryDrawerProps {
 export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({ store }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [activeChart, setActiveChart] = useState<'speed' | 'accel' | 'pos'>('speed');
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const { parts, telemetry, exportCsv } = store;
+  const { parts, telemetry, exportCsv, setTelemetryHoverPoint } = store;
 
   // Encontra todos os pivôs que estão com trace = true
   const tracedPivots = parts.flatMap((part) =>
@@ -52,6 +53,10 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({ store }) => {
     );
 
     const maxVal = Math.max(1, ...values);
+    const chartColor =
+      activeChart === 'speed' ? '#06b6d4' : activeChart === 'accel' ? '#f59e0b' : '#a855f7';
+    const unit =
+      activeChart === 'speed' ? 'mm/s' : activeChart === 'accel' ? 'mm/s²' : 'mm';
 
     const points = samples
       .map((_, idx) => {
@@ -61,9 +66,59 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({ store }) => {
       })
       .join(' ');
 
+    const latestIdx = samples.length - 1;
+    const latestX = pad + (latestIdx / Math.max(1, samples.length - 1)) * (width - 2 * pad);
+    const latestY = height - pad - (values[latestIdx] / maxVal) * (height - 2 * pad);
+
+    const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const mouseX = ((e.clientX - rect.left) / rect.width) * width;
+      const clampedX = Math.max(pad, Math.min(width - pad, mouseX));
+      const ratio = (clampedX - pad) / (width - 2 * pad);
+      const idx = Math.min(samples.length - 1, Math.max(0, Math.round(ratio * (samples.length - 1))));
+      setHoverIndex(idx);
+
+      const s = samples[idx];
+      if (s) {
+        setTelemetryHoverPoint({
+          x: s.x,
+          y: s.y,
+          time: s.time,
+          value: values[idx],
+          label:
+            activeChart === 'speed'
+              ? 'Velocidade'
+              : activeChart === 'accel'
+              ? 'Aceleração'
+              : 'Raio Posição',
+        });
+      }
+    };
+
+    const handleMouseLeave = () => {
+      setHoverIndex(null);
+      setTelemetryHoverPoint(null);
+    };
+
+    const hoverSample = hoverIndex !== null ? samples[hoverIndex] : null;
+    const hoverVal = hoverIndex !== null ? values[hoverIndex] : null;
+    const hoverX =
+      hoverIndex !== null
+        ? pad + (hoverIndex / Math.max(1, samples.length - 1)) * (width - 2 * pad)
+        : null;
+    const hoverY =
+      hoverIndex !== null && hoverVal !== null
+        ? height - pad - (hoverVal / maxVal) * (height - 2 * pad)
+        : null;
+
     return (
       <div className="relative w-full overflow-hidden">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-28 overflow-visible">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-28 overflow-visible cursor-crosshair select-none"
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+        >
           {/* Linhas de Grade Horizontal */}
           <line x1={pad} y1={pad} x2={width - pad} y2={pad} stroke="currentColor" strokeOpacity="0.1" />
           <line
@@ -86,16 +141,47 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({ store }) => {
           {/* Curva de Telemetria */}
           <polyline
             fill="none"
-            stroke={activeChart === 'speed' ? '#06b6d4' : activeChart === 'accel' ? '#f59e0b' : '#a855f7'}
+            stroke={chartColor}
             strokeWidth="2.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             points={points}
           />
 
+          {/* Ponto Atual Dinâmico na Onda (Instante Atual em Tempo Real) */}
+          <circle cx={latestX} cy={latestY} r={8} fill={chartColor} fillOpacity={0.25} />
+          <circle cx={latestX} cy={latestY} r={4.5} fill={chartColor} stroke="#ffffff" strokeWidth={1.5} />
+
+          {/* Marcador e Linha Guia de Hover Interativo */}
+          {hoverX !== null && hoverY !== null && hoverSample && hoverVal !== null && (
+            <g>
+              <line
+                x1={hoverX}
+                y1={pad}
+                x2={hoverX}
+                y2={height - pad}
+                stroke={chartColor}
+                strokeWidth={1}
+                strokeDasharray="3,3"
+                opacity={0.8}
+              />
+              <circle cx={hoverX} cy={hoverY} r={5.5} fill="#ffffff" stroke={chartColor} strokeWidth={2.5} />
+              <text
+                x={Math.min(width - pad - 60, Math.max(pad + 60, hoverX))}
+                y={pad - 6}
+                fontSize="10"
+                fontWeight="bold"
+                fill={chartColor}
+                textAnchor="middle"
+              >
+                {hoverVal.toFixed(1)} {unit} @ {hoverSample.time.toFixed(2)}s
+              </text>
+            </g>
+          )}
+
           {/* Rótulo de Escala Máxima */}
           <text x={pad + 4} y={pad - 4} fontSize="9" fill="currentColor" opacity="0.6">
-            Max: {maxVal.toFixed(1)} {activeChart === 'speed' ? 'mm/s' : activeChart === 'accel' ? 'mm/s²' : 'mm'}
+            Max: {maxVal.toFixed(1)} {unit}
           </text>
         </svg>
       </div>
@@ -129,7 +215,7 @@ export const TelemetryDrawer: React.FC<TelemetryDrawerProps> = ({ store }) => {
               >
                 {tracedPivots.map((tp) => (
                   <option key={tp.pivot.id} value={tp.pivot.id}>
-                    {tp.part.name} - Eixo #{tp.pivot.id % 1000}
+                    {tp.pivot.label || 'Eixo'} (Peça {tp.part.letter || 'A'} - {tp.part.name})
                   </option>
                 ))}
               </select>
