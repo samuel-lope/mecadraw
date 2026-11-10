@@ -206,15 +206,41 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
         <div className="grid grid-cols-2 gap-2">
           <label className="flex flex-col gap-1">
             <span className="text-[10px] text-slate-500">
-              {selPart.type === 'circle' ? 'Diâmetro (mm)' : 'Comprimento (mm)'}
+              {selPart.type === 'circle'
+                ? 'Diâmetro (mm)'
+                : selPart.type === 'bar'
+                ? 'Entre Eixos L (mm)'
+                : 'Comprimento (mm)'}
             </span>
             <input
               type="number"
               step="1"
-              value={Math.round(selPart.w * 10) / 10}
+              value={
+                selPart.type === 'bar' && selPart.pivots.length >= 2
+                  ? Math.round(
+                      Math.hypot(
+                        selPart.pivots[1].lx - selPart.pivots[0].lx,
+                        selPart.pivots[1].ly - selPart.pivots[0].ly
+                      ) * 10
+                    ) / 10
+                  : Math.round(selPart.w * 10) / 10
+              }
               onChange={(e) => {
                 const val = Math.max(10, parseFloat(e.target.value) || 10);
                 updatePart(selPart.id, (p) => {
+                  if (p.type === 'bar' && p.pivots.length >= 2) {
+                    const newL = val;
+                    const newW = newL + p.h;
+                    return {
+                      ...p,
+                      w: newW,
+                      pivots: p.pivots.map((pv, idx) => {
+                        if (idx === 0) return { ...pv, lx: -newL / 2, ly: 0 };
+                        if (idx === 1) return { ...pv, lx: newL / 2, ly: 0 };
+                        return pv;
+                      }),
+                    };
+                  }
                   const factor = val / p.w;
                   return {
                     ...p,
@@ -230,14 +256,25 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
 
           {selPart.type !== 'circle' && (
             <label className="flex flex-col gap-1">
-              <span className="text-[10px] text-slate-500">Largura (mm)</span>
+              <span className="text-[10px] text-slate-500">
+                {selPart.type === 'bar' ? 'Espessura h (mm)' : 'Largura (mm)'}
+              </span>
               <input
                 type="number"
                 step="1"
                 value={Math.round(selPart.h * 10) / 10}
                 onChange={(e) => {
                   const val = Math.max(8, parseFloat(e.target.value) || 8);
-                  updatePart(selPart.id, (p) => ({ ...p, h: val }));
+                  updatePart(selPart.id, (p) => {
+                    if (p.type === 'bar' && p.pivots.length >= 2) {
+                      const L = Math.hypot(
+                        p.pivots[1].lx - p.pivots[0].lx,
+                        p.pivots[1].ly - p.pivots[0].ly
+                      );
+                      return { ...p, h: val, w: L + val };
+                    }
+                    return { ...p, h: val };
+                  });
                 }}
                 className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
               />
@@ -355,19 +392,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                       className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
                     />
                   </label>
-                  <label className="flex flex-col gap-0.5">
-                    <span className="text-[10px] text-slate-500">Ângulo (°)</span>
-                    <input
-                      type="number"
-                      step="5"
-                      value={Math.round(((slot.angle * 180) / Math.PI) % 360)}
-                      onChange={(e) => {
-                        const deg = parseFloat(e.target.value) || 0;
-                        updateSlot(selPart.id, slot.id, { angle: (deg * Math.PI) / 180 });
-                      }}
-                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                    />
-                  </label>
+                  {selPart.type === 'bar' ? (
+                    <div className="flex flex-col gap-0.5 opacity-80">
+                      <span className="text-[10px] text-slate-500">Alinhamento</span>
+                      <span className="p-1 rounded bg-slate-100 dark:bg-slate-800 text-[10px] text-blue-600 dark:text-blue-400 font-mono font-medium text-center border border-slate-200 dark:border-slate-700">
+                        Centro da Barra
+                      </span>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] text-slate-500">Ângulo (°)</span>
+                      <input
+                        type="number"
+                        step="5"
+                        value={Math.round(((slot.angle * 180) / Math.PI) % 360)}
+                        onChange={(e) => {
+                          const deg = parseFloat(e.target.value) || 0;
+                          updateSlot(selPart.id, slot.id, { angle: (deg * Math.PI) / 180 });
+                        }}
+                        className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                      />
+                    </label>
+                  )}
                   <label className="flex flex-col gap-0.5">
                     <span className="text-[10px] text-slate-500">Local X (mm)</span>
                     <input
@@ -381,19 +427,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                       className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
                     />
                   </label>
-                  <label className="flex flex-col gap-0.5">
-                    <span className="text-[10px] text-slate-500">Local Y (mm)</span>
-                    <input
-                      type="number"
-                      step="1"
-                      value={Math.round(slot.ly * 10) / 10}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value) || 0;
-                        updateSlot(selPart.id, slot.id, { ly: val });
-                      }}
-                      className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                    />
-                  </label>
+                  {selPart.type !== 'bar' && (
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] text-slate-500">Local Y (mm)</span>
+                      <input
+                        type="number"
+                        step="1"
+                        value={Math.round(slot.ly * 10) / 10}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          updateSlot(selPart.id, slot.id, { ly: val });
+                        }}
+                        className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                      />
+                    </label>
+                  )}
                 </div>
 
                 <label className="flex items-center gap-1.5 cursor-pointer mt-0.5">

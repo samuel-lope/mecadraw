@@ -1030,7 +1030,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
           return {
             ...p,
-            w: len + 20,
+            w: len + p.h,
             rot: ang,
             x: cx,
             y: cy,

@@ -279,12 +279,13 @@ export const useMechanismStore = () => {
         syncPartsAndPivots(
           prev.map((p) => {
             if (p.id !== partId) return p;
+            const isBar = p.type === 'bar';
             const newSlot: PartSlot = {
               id: Date.now() + Math.floor(Math.random() * 1000),
               lx,
-              ly,
+              ly: isBar ? 0 : ly,
               length,
-              angle,
+              angle: isBar ? 0 : angle,
               width: 12,
               closedEnds,
             };
@@ -306,11 +307,17 @@ export const useMechanismStore = () => {
         syncPartsAndPivots(
           prev.map((p) => {
             if (p.id !== partId || !p.slots) return p;
+            const isBar = p.type === 'bar';
             return {
               ...p,
               slots: p.slots.map((s) => {
                 if (s.id !== slotId) return s;
-                return typeof updater === 'function' ? updater(s) : { ...s, ...updater };
+                const updated = typeof updater === 'function' ? updater(s) : { ...s, ...updater };
+                if (isBar) {
+                  updated.ly = 0;
+                  updated.angle = 0;
+                }
+                return updated;
               }),
             };
           })

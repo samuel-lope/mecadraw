@@ -28,7 +28,7 @@ export const createBar = (
     x: cx,
     y: cy,
     rot: ang,
-    w: len + 20,
+    w: len + thickness,
     h: thickness,
     pivots: [
       { id: p1Id, label: `${prefix}1`, lx: -len / 2, ly: 0 },

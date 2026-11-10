@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeMechanism, createSimulation, stepSimulation } from './kinematics';
-import { PRESETS } from './presets';
+import { createBar, PRESETS } from './presets';
 
 describe('Kinematics Engine', () => {
   it('correctly calculates DOF and Grashof for a four-bar linkage', () => {
@@ -146,5 +146,24 @@ describe('Kinematics Engine', () => {
       expect(sim.lockedUp).toBe(false);
       expect(sim.errorResidual).toBeLessThan(1.0);
     }
+  });
+
+  it('aligns bar end pivots strictly with fillet centers (w = L + h)', () => {
+    const bar = createBar(0, 0, 100, 0, 'Barra Teste', 20);
+
+    const L = Math.hypot(bar.pivots[1].lx - bar.pivots[0].lx, bar.pivots[1].ly - bar.pivots[0].ly);
+    expect(L).toBe(100);
+    expect(bar.h).toBe(20);
+    // Comprimento total da barra é exatamente L + h
+    expect(bar.w).toBe(L + bar.h);
+
+    // Centros geométricos dos fillets de raio h/2 nas duas pontas:
+    const leftFilletCenter = -bar.w / 2 + bar.h / 2;
+    const rightFilletCenter = bar.w / 2 - bar.h / 2;
+
+    expect(bar.pivots[0].lx).toBe(leftFilletCenter);
+    expect(bar.pivots[1].lx).toBe(rightFilletCenter);
+    expect(bar.pivots[0].ly).toBe(0);
+    expect(bar.pivots[1].ly).toBe(0);
   });
 });
