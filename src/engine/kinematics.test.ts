@@ -14,6 +14,13 @@ describe('Kinematics Engine', () => {
     expect(analysis.dof).toBe(1); // 1 Grau de liberdade!
     expect(analysis.hasMotor).toBe(true);
     expect(analysis.isOverconstrained).toBe(false);
+
+    expect(analysis.details).toBeDefined();
+    expect(analysis.details?.movingLinksCount).toBe(3);
+    expect(analysis.details?.hasGround).toBe(true);
+    expect(analysis.details?.revoluteCount).toBe(2);
+    expect(analysis.details?.groundPivotsCount).toBe(2);
+    expect(analysis.details?.motorCount).toBe(1);
   });
 
   it('initializes and steps four-bar simulation without exploding', () => {
@@ -362,5 +369,68 @@ describe('Kinematics Engine', () => {
     // G2 gira no MESMO SENTIDO (correia aberta) com metade da velocidade angular (z1/z2 = 10/20 = 0.5)
     const expected2 = expected1 * (10 / 20);
     expect(g2.rot).toBeCloseTo(expected2, 2);
+  });
+
+  it('decompõe corretamente DOF para engrenagem fixa com engrenagem livre (DOF=3) vs ambas fixas (DOF=1)', () => {
+    const g1: Part = {
+      id: 1,
+      name: 'G1',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      gear: { teeth: 20, module: 4 },
+      pivots: [{ id: 10, label: 'A1', lx: 0, ly: 0, fixed: true, motor: true }],
+    };
+
+    const g2Floating: Part = {
+      id: 2,
+      name: 'G2',
+      type: 'gear',
+      x: 66,
+      y: 0,
+      rot: 0,
+      w: 52,
+      h: 52,
+      gear: { teeth: 13, module: 4 },
+      pivots: [{ id: 20, label: 'B1', lx: 0, ly: 0, fixed: false }], // Solta no espaço
+    };
+
+    const joints: Joint[] = [
+      {
+        id: 100,
+        type: 'gear',
+        p1: 10,
+        p2: 20,
+        part1Id: 1,
+        part2Id: 2,
+        gearRatio: 20 / 13,
+      },
+    ];
+
+    // Caso 1: G1 com motor/fixo, G2 livre -> L=3 (G1, G2, Terra), J1=1 (G1 fixed), J2=1 (mesh)
+    // M = 3(3 - 1) - 2(1) - 1 = 6 - 2 - 1 = 3 DOF!
+    const analysisFloating = analyzeMechanism([g1, g2Floating], joints);
+    expect(analysisFloating.links).toBe(3);
+    expect(analysisFloating.joints1).toBe(1);
+    expect(analysisFloating.joints2).toBe(1);
+    expect(analysisFloating.dof).toBe(3);
+    expect(analysisFloating.details?.groundPivotsCount).toBe(1);
+    expect(analysisFloating.details?.gearMeshesCount).toBe(1);
+    expect(analysisFloating.details?.motorCount).toBe(1);
+
+    // Caso 2: G2 também fixada ao solo -> L=3, J1=2, J2=1
+    // M = 3(3 - 1) - 2(2) - 1 = 6 - 4 - 1 = 1 DOF!
+    const g2Fixed: Part = {
+      ...g2Floating,
+      pivots: [{ id: 20, label: 'B1', lx: 0, ly: 0, fixed: true }],
+    };
+    const analysisFixed = analyzeMechanism([g1, g2Fixed], joints);
+    expect(analysisFixed.links).toBe(3);
+    expect(analysisFixed.joints1).toBe(2);
+    expect(analysisFixed.joints2).toBe(1);
+    expect(analysisFixed.dof).toBe(1);
   });
 });

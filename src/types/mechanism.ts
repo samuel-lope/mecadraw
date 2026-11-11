@@ -141,6 +141,18 @@ export interface MechanismAnalysis {
   };
   hasMotor: boolean;
   isOverconstrained: boolean;
+  details?: {
+    movingLinksCount: number;
+    hasGround: boolean;
+    weldCount: number;
+    revoluteCount: number;
+    groundPivotsCount: number;
+    slidersCount: number;
+    gearMeshesCount: number;
+    beltsCount: number;
+    pinInSlotsCount: number;
+    motorCount: number;
+  };
 }
 
 export interface SelectionState {

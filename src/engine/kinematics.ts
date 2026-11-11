@@ -891,6 +891,9 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
     };
   }
 
+  const numBelts = joints.filter((j) => j.type === 'belt').length;
+  const motorCount = parts.flatMap((p) => p.pivots).filter((pv) => pv.motor).length;
+
   return {
     links: numLinks,
     joints1: J1,
@@ -899,5 +902,17 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
     grashof: grashofInfo,
     hasMotor,
     isOverconstrained: dof < 0,
+    details: {
+      movingLinksCount: Math.max(0, parts.length - numWeldJoints),
+      hasGround,
+      weldCount: numWeldJoints,
+      revoluteCount: numRevolute,
+      groundPivotsCount: numFixedJoints,
+      slidersCount: numSliders,
+      gearMeshesCount: totalGearMeshes,
+      beltsCount: numBelts,
+      pinInSlotsCount: numPinInSlots,
+      motorCount,
+    },
   };
 };

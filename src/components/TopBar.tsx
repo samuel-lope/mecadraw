@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { MechanismStore } from '../state/useMechanismStore';
 import { PRESETS } from '../engine/presets';
+import { DofDetailsModal } from './DofDetailsModal';
 import {
   Play,
   Pause,
@@ -15,6 +16,7 @@ import {
   Magnet,
   Sparkles,
   Settings,
+  Info,
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -33,6 +35,8 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
     setSimDir,
     simLockedUp,
     analysis,
+    parts,
+    joints,
     camera,
     setCamera,
     undo,
@@ -42,6 +46,8 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
     exportJson,
     importJson,
   } = store;
+
+  const [showDofModal, setShowDofModal] = useState(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -118,16 +124,17 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
 
       {/* Centro: Telemetria Mecânica & Indicadores de Engenharia */}
       <div className="flex items-center gap-2">
-        {/* Badge de Mobilidade (DOF) */}
-        <div
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold font-mono border ${
+        {/* Badge Interativo de Mobilidade (DOF) */}
+        <button
+          onClick={() => setShowDofModal(true)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold font-mono border cursor-pointer hover:ring-2 hover:ring-blue-400/50 hover:shadow-sm active:scale-95 transition-all outline-none ${
             analysis.dof === 1
               ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
               : analysis.dof > 1
               ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800'
               : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800'
           }`}
-          title={`Mobilidade de Gruebler-Kutzbach: M = 3(L-1) - 2J1 - J2. Elos: ${analysis.links}, Juntas J1: ${analysis.joints1}`}
+          title="Clique para ver a decomposição detalhada dos Graus de Liberdade (Gruebler-Kutzbach)"
         >
           <span>DOF: {analysis.dof}</span>
           <span className="text-[10px] opacity-75 font-sans">
@@ -137,7 +144,8 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
               ? `(${analysis.dof} Motores)`
               : '(Hiperestático)'}
           </span>
-        </div>
+          <Info className="w-3 h-3 opacity-60 ml-0.5" />
+        </button>
 
         {/* Badge de Grashof (se for 4 barras) */}
         {analysis.grashof?.isFourBar && (
@@ -318,6 +326,16 @@ export const TopBar: React.FC<TopBarProps> = ({ store }) => {
           Limpar
         </button>
       </div>
+
+      {/* Modal de Detalhes de Mobilidade (DOF) */}
+      {showDofModal && (
+        <DofDetailsModal
+          analysis={analysis}
+          parts={parts}
+          joints={joints}
+          onClose={() => setShowDofModal(false)}
+        />
+      )}
     </header>
   );
 };
