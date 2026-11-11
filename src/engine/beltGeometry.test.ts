@@ -94,4 +94,33 @@ describe('beltGeometry', () => {
     // Ponto muito longe
     expect(hitBelt({ x: 100, y: 150 }, geom, 5)).toBe(false);
   });
+
+  it('calcula tangência externa correta com phi > 90° e ortogonalidade exata (z=15, z=86, m=4, d=406)', () => {
+    // Polia 1: z=15, m=4 => r1 = 30mm
+    // Polia 2: z=86, m=4 => r2 = 172mm
+    // d = 406mm
+    const g1 = createGear(1, 0, 0, 15, 4);
+    const g2 = createGear(2, 406, 0, 86, 4);
+
+    const geom = calculateBeltGeometry(g1, g2);
+    expect(geom).not.toBeNull();
+    if (!geom) return;
+
+    expect(geom.r1).toBe(30);
+    expect(geom.r2).toBe(172);
+    expect(geom.d).toBe(406);
+
+    // phi = acos((30 - 172) / 406) = acos(-142/406) ≈ 1.928 rad ≈ 110.47°
+    expect(geom.phi * 180 / Math.PI).toBeGreaterThan(90);
+    expect(geom.phi * 180 / Math.PI).toBeCloseTo(110.47, 1);
+
+    // Ortogonalidade exata entre vetor do vão e normais de tangência
+    const span1DotNormal = (geom.t2a.x - geom.t1a.x) * Math.cos(geom.u) + (geom.t2a.y - geom.t1a.y) * Math.sin(geom.u);
+    const span2DotNormal = (geom.t1b.x - geom.t2b.x) * Math.cos(geom.l) + (geom.t1b.y - geom.t2b.y) * Math.sin(geom.l);
+    expect(span1DotNormal).toBeCloseTo(0, 5);
+    expect(span2DotNormal).toBeCloseTo(0, 5);
+
+    // Comprimento total esperado ≈ 1496.8mm
+    expect(geom.totalLength).toBeCloseTo(1496.79, 1);
+  });
 });

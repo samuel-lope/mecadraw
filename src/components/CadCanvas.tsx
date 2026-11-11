@@ -155,25 +155,22 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     const sC2 = worldToScreen(geom.c2, cam, cw, ch);
     const sT1a = worldToScreen(geom.t1a, cam, cw, ch);
     const sT1b = worldToScreen(geom.t1b, cam, cw, ch);
+    const sT2a = worldToScreen(geom.t2a, cam, cw, ch);
     const sT2b = worldToScreen(geom.t2b, cam, cw, ch);
 
     const sR1 = geom.r1 * cam.zoom;
     const sR2 = geom.r2 * cam.zoom;
     const beltThick = Math.max(4, 5.5 * cam.zoom);
 
-    // Ângulos das tangentes externas
-    const alphaA = geom.thetaC + Math.PI / 2 - geom.beta;
-    const alphaB = geom.thetaC - Math.PI / 2 + geom.beta;
-
     ctx.save();
 
     // 1. Caminho contínuo matematicamente exato da correia fechada
     const beltPath = new Path2D();
-    beltPath.moveTo(sT1b.x, sT1b.y);
-    beltPath.lineTo(sT2b.x, sT2b.y);
-    beltPath.arc(sC2.x, sC2.y, sR2, alphaB, alphaA, false);
-    beltPath.lineTo(sT1a.x, sT1a.y);
-    beltPath.arc(sC1.x, sC1.y, sR1, alphaA, alphaB, false);
+    beltPath.moveTo(sT1a.x, sT1a.y);
+    beltPath.lineTo(sT2a.x, sT2a.y);
+    beltPath.arc(sC2.x, sC2.y, sR2, geom.u, geom.l, true);
+    beltPath.lineTo(sT1b.x, sT1b.y);
+    beltPath.arc(sC1.x, sC1.y, sR1, geom.l, geom.u, true);
     beltPath.closePath();
 
     // 2. Halo de Seleção / Hover

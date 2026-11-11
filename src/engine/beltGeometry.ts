@@ -11,11 +11,14 @@ export interface BeltGeometryData {
   m: number;  // Módulo das engrenagens
   d: number;  // Distância entre centros (mm)
   thetaC: number; // Ângulo da linha de centros C1 -> C2
-  beta: number;   // Ângulo de inclinação das tangentes externas
-  t1a: Point2D;   // Ponto de tangência superior em G1
-  t1b: Point2D;   // Ponto de tangência inferior em G1
-  t2a: Point2D;   // Ponto de tangência superior em G2
-  t2b: Point2D;   // Ponto de tangência inferior em G2
+  phi: number;    // Ângulo de tangência acos((r1 - r2) / d)
+  beta: number;   // phi - PI/2 = asin((r2 - r1) / d)
+  u: number;      // thetaC + phi
+  l: number;      // thetaC - phi
+  t1a: Point2D;   // Ponto de tangência em G1 (ângulo u)
+  t2a: Point2D;   // Ponto de tangência em G2 (ângulo u)
+  t2b: Point2D;   // Ponto de tangência em G2 (ângulo l)
+  t1b: Point2D;   // Ponto de tangência em G1 (ângulo l)
   spanLength: number; // Comprimento de cada vão reto
   arc1Length: number; // Comprimento de abraçamento em G1
   arc2Length: number; // Comprimento de abraçamento em G2
@@ -46,39 +49,37 @@ export const calculateBeltGeometry = (
   if (d <= Math.abs(r2 - r1) + 2) return null;
 
   const thetaC = Math.atan2(dy, dx);
-  const sinBeta = Math.max(-1, Math.min(1, (r2 - r1) / d));
-  const beta = Math.asin(sinBeta);
+  // Ângulo analítico exato de tangência externa
+  const cosPhi = Math.max(-1, Math.min(1, (r1 - r2) / d));
+  const phi = Math.acos(cosPhi);
+  const beta = phi - Math.PI / 2;
 
-  // Ângulos das tangentes externas
-  const alphaA = thetaC + Math.PI / 2 - beta;
-  const alphaB = thetaC - Math.PI / 2 + beta;
+  const u = thetaC + phi;
+  const l = thetaC - phi;
 
-  // Pontos de tangência na Polia 1
+  // Pontos de tangência no ramo u
   const t1a: Point2D = {
-    x: gear1.x + r1 * Math.cos(alphaA),
-    y: gear1.y + r1 * Math.sin(alphaA),
+    x: gear1.x + r1 * Math.cos(u),
+    y: gear1.y + r1 * Math.sin(u),
+  };
+  const t2a: Point2D = {
+    x: gear2.x + r2 * Math.cos(u),
+    y: gear2.y + r2 * Math.sin(u),
+  };
+
+  // Pontos de tangência no ramo l
+  const t2b: Point2D = {
+    x: gear2.x + r2 * Math.cos(l),
+    y: gear2.y + r2 * Math.sin(l),
   };
   const t1b: Point2D = {
-    x: gear1.x + r1 * Math.cos(alphaB),
-    y: gear1.y + r1 * Math.sin(alphaB),
-  };
-
-  // Pontos de tangência na Polia 2
-  const t2a: Point2D = {
-    x: gear2.x + r2 * Math.cos(alphaA),
-    y: gear2.y + r2 * Math.sin(alphaA),
-  };
-  const t2b: Point2D = {
-    x: gear2.x + r2 * Math.cos(alphaB),
-    y: gear2.y + r2 * Math.sin(alphaB),
+    x: gear1.x + r1 * Math.cos(l),
+    y: gear1.y + r1 * Math.sin(l),
   };
 
   const spanLength = Math.sqrt(Math.max(0, d * d - (r2 - r1) * (r2 - r1)));
-  const wrapAngle1 = Math.PI - 2 * beta;
-  const wrapAngle2 = Math.PI + 2 * beta;
-
-  const arc1Length = r1 * wrapAngle1;
-  const arc2Length = r2 * wrapAngle2;
+  const arc1Length = r1 * (2 * Math.PI - 2 * phi);
+  const arc2Length = r2 * (2 * phi);
   const totalLength = 2 * spanLength + arc1Length + arc2Length;
 
   const pitch = Math.PI * m;
@@ -95,11 +96,14 @@ export const calculateBeltGeometry = (
     m,
     d,
     thetaC,
+    phi,
     beta,
+    u,
+    l,
     t1a,
-    t1b,
     t2a,
     t2b,
+    t1b,
     spanLength,
     arc1Length,
     arc2Length,
@@ -133,54 +137,45 @@ export const getBeltPointAtDistance = (
   const L3 = L2 + geom.spanLength;           // Span 2: T2b -> T1b
   // L4 = L3 + geom.arc1Length = L           // Arc 1: T1b -> T1a (no gear 1)
 
-  // 1. Ramo Reto Superior (T1a -> T2a)
+  // 1. Ramo Reto 1 (T1a -> T2a)
   if (curS <= L1) {
     const t = curS / L1;
     const x = geom.t1a.x + (geom.t2a.x - geom.t1a.x) * t;
     const y = geom.t1a.y + (geom.t2a.y - geom.t1a.y) * t;
     const angle = Math.atan2(geom.t2a.y - geom.t1a.y, geom.t2a.x - geom.t1a.x);
-    // Normal apontando para o interior (direita em relação à direção T1a -> T2a)
     const nx = Math.sin(angle);
     const ny = -Math.cos(angle);
     return { x, y, angle, nx, ny };
   }
 
-  // 2. Arco de Abraçamento Polia 2 (T2a -> T2b em sentido horário ao redor de C2)
+  // 2. Arco de Abraçamento Polia 2 (T2a -> T2b em sentido anti-horário de u para l)
   if (curS <= L2) {
     const arcDist = curS - L1;
     const frac = arcDist / geom.arc2Length;
-    // Ângulo inicial em T2a é thetaC + PI/2 - beta
-    const startAng = geom.thetaC + Math.PI / 2 - geom.beta;
-    const wrapAng = Math.PI + 2 * geom.beta;
-    // O arco envolve o lado de fora (sentido horário em coordenadas de tela se desenhado de T2a para T2b)
-    const ang = startAng - frac * wrapAng;
+    const ang = geom.u - frac * (2 * geom.phi);
     const x = geom.c2.x + geom.r2 * Math.cos(ang);
     const y = geom.c2.y + geom.r2 * Math.sin(ang);
     const tangentAng = ang - Math.PI / 2;
-    // Normal apontando para o centro C2 (interior)
     const nx = (geom.c2.x - x) / geom.r2;
     const ny = (geom.c2.y - y) / geom.r2;
     return { x, y, angle: tangentAng, nx, ny };
   }
 
-  // 3. Ramo Reto Inferior (T2b -> T1b)
+  // 3. Ramo Reto 2 (T2b -> T1b)
   if (curS <= L3) {
     const t = (curS - L2) / geom.spanLength;
     const x = geom.t2b.x + (geom.t1b.x - geom.t2b.x) * t;
     const y = geom.t2b.y + (geom.t1b.y - geom.t2b.y) * t;
     const angle = Math.atan2(geom.t1b.y - geom.t2b.y, geom.t1b.x - geom.t2b.x);
-    // Normal apontando para o interior
     const nx = Math.sin(angle);
     const ny = -Math.cos(angle);
     return { x, y, angle, nx, ny };
   }
 
-  // 4. Arco de Abraçamento Polia 1 (T1b -> T1a ao redor de C1)
+  // 4. Arco de Abraçamento Polia 1 (T1b -> T1a de l para u ao redor de C1)
   const arcDist = curS - L3;
   const frac = arcDist / geom.arc1Length;
-  const startAng = geom.thetaC - Math.PI / 2 + geom.beta;
-  const wrapAng = Math.PI - 2 * geom.beta;
-  const ang = startAng - frac * wrapAng;
+  const ang = geom.l - frac * (2 * Math.PI - 2 * geom.phi);
   const x = geom.c1.x + geom.r1 * Math.cos(ang);
   const y = geom.c1.y + geom.r1 * Math.sin(ang);
   const tangentAng = ang - Math.PI / 2;
@@ -220,21 +215,20 @@ export const hitBelt = (
   if (distPointToSegment(pt, geom.t1a, geom.t2a) <= tolerance) return true;
   if (distPointToSegment(pt, geom.t2b, geom.t1b) <= tolerance) return true;
 
-  // Testar proximidade do arco da Polia 1
+  // Testar proximidade do arco da Polia 1 (lado exterior, oposto a C2)
   const d1 = Math.hypot(pt.x - geom.c1.x, pt.y - geom.c1.y);
   if (Math.abs(d1 - geom.r1) <= tolerance) {
     const ang = Math.atan2(pt.y - geom.c1.y, pt.x - geom.c1.x);
-    // Ângulo relativo à linha de centros
-    const relAng = Math.atan2(Math.sin(ang - geom.thetaC), Math.cos(ang - geom.thetaC));
-    if (Math.abs(relAng) > Math.PI / 2 - geom.beta) return true;
+    const relAng = Math.atan2(Math.sin(ang - (geom.thetaC + Math.PI)), Math.cos(ang - (geom.thetaC + Math.PI)));
+    if (Math.abs(relAng) <= Math.PI - geom.phi) return true;
   }
 
-  // Testar proximidade do arco da Polia 2
+  // Testar proximidade do arco da Polia 2 (lado exterior, no sentido de C2)
   const d2 = Math.hypot(pt.x - geom.c2.x, pt.y - geom.c2.y);
   if (Math.abs(d2 - geom.r2) <= tolerance) {
     const ang = Math.atan2(pt.y - geom.c2.y, pt.x - geom.c2.x);
     const relAng = Math.atan2(Math.sin(ang - geom.thetaC), Math.cos(ang - geom.thetaC));
-    if (Math.abs(relAng) < Math.PI / 2 + geom.beta) return true;
+    if (Math.abs(relAng) <= geom.phi) return true;
   }
 
   return false;
