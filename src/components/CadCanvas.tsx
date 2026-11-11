@@ -731,6 +731,11 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         return;
       }
 
+      // Juntas de Engrenamento e Correia já possuem renderização dedicada (contatos ISO / drawTimingBelt)
+      if (j.type === 'gear' || j.type === 'belt') {
+        return;
+      }
+
       // Juntas de Eixo Composto / Soldadas (Engrenagens Solidárias no mesmo eixo)
       if (j.type === 'weld') {
         const p1 = parts.find((p) => p.id === j.part1Id);
@@ -1419,13 +1424,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         setSelection({ partId: clickedPivot.part.id, pivotId: clickedPivot.pivot.id });
 
         if (!simRunning) {
-          // Encontrar cluster de todos os pivôs conectados a este por juntas
+          // Encontrar cluster de todos os pivôs conectados a este apenas por juntas coincidentes (revolute / weld)
           const cluster = new Set<number>([clickedPivot.pivot.id]);
           let changed = true;
           while (changed) {
             changed = false;
             for (const j of joints) {
-              if (j.p2 !== undefined) {
+              if (j.p2 !== undefined && (!j.type || j.type === 'revolute' || j.type === 'weld')) {
                 if (cluster.has(j.p1) && !cluster.has(j.p2)) {
                   cluster.add(j.p2);
                   changed = true;
@@ -1478,15 +1483,62 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             }
           }
 
-          setDragState({
-            mode: 'dragPivotCluster',
-            startScreen: screenPt,
-            startWorld: worldPt,
-            curWorld: worldPt,
-            clusterIds: Array.from(cluster),
-            connectedBars,
-            connectedOtherParts,
-          });
+          // Se for o eixo central de uma engrenagem sem barras conectadas, usar dragPart
+          // para manter o mesmo comportamento de movimentação e snap de engrenamento do corpo
+          const isGearCenterPivot =
+            clickedPivot.part.type === 'gear' &&
+            Math.hypot(clickedPivot.pivot.lx, clickedPivot.pivot.ly) < 1e-3;
+
+          if (isGearCenterPivot && connectedBars.length === 0) {
+            const weldedCluster = new Set<number>([clickedPivot.part.id]);
+            let weldChanged = true;
+            while (weldChanged) {
+              weldChanged = false;
+              for (const j of joints) {
+                if (j.type === 'weld' && j.part1Id && j.part2Id) {
+                  if (weldedCluster.has(j.part1Id) && !weldedCluster.has(j.part2Id)) {
+                    weldedCluster.add(j.part2Id);
+                    weldChanged = true;
+                  } else if (weldedCluster.has(j.part2Id) && !weldedCluster.has(j.part1Id)) {
+                    weldedCluster.add(j.part1Id);
+                    weldChanged = true;
+                  }
+                }
+              }
+            }
+            weldedCluster.delete(clickedPivot.part.id);
+
+            const initialPartnerStates = Array.from(weldedCluster).map((pid) => {
+              const partner = parts.find((p) => p.id === pid);
+              return {
+                id: pid,
+                x: partner ? partner.x : clickedPivot.part.x,
+                y: partner ? partner.y : clickedPivot.part.y,
+                rot: partner ? partner.rot : clickedPivot.part.rot,
+              };
+            });
+
+            setDragState({
+              mode: 'dragPart',
+              startScreen: screenPt,
+              startWorld: worldPt,
+              targetPart: clickedPivot.part,
+              initialPartPos: { x: clickedPivot.part.x, y: clickedPivot.part.y },
+              initialPartRot: clickedPivot.part.rot,
+              initialPartnerStates,
+              curWorld: worldPt,
+            });
+          } else {
+            setDragState({
+              mode: 'dragPivotCluster',
+              startScreen: screenPt,
+              startWorld: worldPt,
+              curWorld: worldPt,
+              clusterIds: Array.from(cluster),
+              connectedBars,
+              connectedOtherParts,
+            });
+          }
         }
         return;
       }

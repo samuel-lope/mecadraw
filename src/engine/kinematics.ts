@@ -798,16 +798,18 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
   const numWeldJoints = joints.filter((j) => j.type === 'weld').length;
   const numLinks = Math.max(1, parts.length - numWeldJoints + (hasGround ? 1 : 0));
 
-  // Contagem de juntas J1 (revolutas, fixas, sliders) e J2 (pino em fenda e engrenamentos)
-  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot' && j.type !== 'gear' && j.type !== 'weld').length;
+  // Contagem de juntas J1 (revolutas, fixas, sliders) e J2 (pino em fenda, engrenamentos e correias)
+  const numRevolute = joints.filter(
+    (j) => j.type !== 'pin-in-slot' && j.type !== 'gear' && j.type !== 'weld' && j.type !== 'belt'
+  ).length;
   const numPinInSlots = joints.filter((j) => j.type === 'pin-in-slot').length;
   const numFixedJoints = groundPivots.length;
   const numSliders = parts.flatMap((p) => p.pivots).filter((pv) => pv.slider?.enabled).length;
 
-  // Contagem de engrenamentos (juntas explícitas + proximidade física)
+  // Contagem de engrenamentos e correias (juntas explícitas + proximidade física)
   const pairedGears = new Set<string>();
   for (const j of joints) {
-    if (j.type === 'gear' && j.part1Id && j.part2Id) {
+    if ((j.type === 'gear' || j.type === 'belt') && j.part1Id && j.part2Id) {
       pairedGears.add([j.part1Id, j.part2Id].sort().join('-'));
     }
   }
