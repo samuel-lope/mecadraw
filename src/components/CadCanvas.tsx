@@ -1459,32 +1459,41 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     setDragState(null);
   };
 
-  // Zoom no Cursor com a Roda do Mouse
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
+  // Zoom no Cursor com a Roda do Mouse (Passive: false para permitir preventDefault)
+  useEffect(() => {
     const cv = canvasRef.current;
     if (!cv) return;
 
-    const rect = cv.getBoundingClientRect();
-    const screenPt: Point2D = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const worldBefore = screenToWorld(screenPt, camera, cv.clientWidth, cv.clientHeight);
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = cv.getBoundingClientRect();
+      const screenPt: Point2D = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 
-    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
-    const newZoom = Math.min(5.0, Math.max(0.2, camera.zoom * zoomFactor));
+      setCamera((c) => {
+        const worldBefore = screenToWorld(screenPt, c, cv.clientWidth, cv.clientHeight);
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+        const newZoom = Math.min(5.0, Math.max(0.2, c.zoom * zoomFactor));
 
-    // Mantém o ponto do mundo fixo sob o cursor
-    const cx = cv.clientWidth / 2;
-    const cy = cv.clientHeight / 2;
-    const newCameraX = worldBefore.x - (screenPt.x - cx) / newZoom;
-    const newCameraY = worldBefore.y - (screenPt.y - cy) / newZoom;
+        // Mantém o ponto do mundo fixo sob o cursor
+        const cx = cv.clientWidth / 2;
+        const cy = cv.clientHeight / 2;
+        const newCameraX = worldBefore.x - (screenPt.x - cx) / newZoom;
+        const newCameraY = worldBefore.y - (screenPt.y - cy) / newZoom;
 
-    setCamera((c) => ({
-      ...c,
-      zoom: newZoom,
-      x: newCameraX,
-      y: newCameraY,
-    }));
-  };
+        return {
+          ...c,
+          zoom: newZoom,
+          x: newCameraX,
+          y: newCameraY,
+        };
+      });
+    };
+
+    cv.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      cv.removeEventListener('wheel', onWheel);
+    };
+  }, [setCamera]);
 
   // Elemento selecionado para Floating Quick Actions
   const selectedPart = parts.find((p) => p.id === selection.partId);
@@ -1499,7 +1508,6 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onWheel={handleWheel}
       />
 
       {/* Floating Quick Action Bar (Próxima à seleção) */}
