@@ -161,13 +161,23 @@ export const useMechanismStore = () => {
   // Passo de simulação (chamado pelo loop de animação do Canvas)
   const stepSim = useCallback(
     (dt: number) => {
+      const motorKey = parts
+        .flatMap((p) => p.pivots)
+        .filter((v) => v.motor)
+        .map((v) => `${v.id}:${v.motorDir || 1}:${v.motorRpm || 0}`)
+        .sort()
+        .join(',');
+
       if (!simInstanceRef.current) {
         simInstanceRef.current = createSimulation(parts, joints);
+        (simInstanceRef.current as any)._motorKey = motorKey;
       } else {
         const allPivotIds = parts.flatMap((p) => p.pivots.map((v) => v.id));
         const missing = allPivotIds.some((id) => !simInstanceRef.current!.particles[id]);
-        if (missing) {
+        const curMotorKey = (simInstanceRef.current as any)._motorKey;
+        if (missing || curMotorKey !== motorKey) {
           simInstanceRef.current = createSimulation(parts, joints);
+          (simInstanceRef.current as any)._motorKey = motorKey;
         }
       }
       stepSimulation(
@@ -575,6 +585,8 @@ export const useMechanismStore = () => {
         }))
       );
       setTrails({});
+      simInstanceRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -598,6 +610,8 @@ export const useMechanismStore = () => {
         }))
       );
       setTrails({});
+      simInstanceRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -626,6 +640,8 @@ export const useMechanismStore = () => {
           }),
         }))
       );
+      simInstanceRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );

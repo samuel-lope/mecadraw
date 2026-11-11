@@ -460,10 +460,10 @@ export const stepSimulation = (
       if (p1Motor && !p2Motor) {
         p2.rot -= rotErr;
       } else if (!p1Motor && p2Motor) {
-        p1.rot += rotErr / g.ratio;
+        p1.rot -= rotErr / g.ratio;
       } else {
         p2.rot -= rotErr * 0.5;
-        p1.rot += (rotErr / g.ratio) * 0.5;
+        p1.rot -= (rotErr / g.ratio) * 0.5;
       }
 
       // Sincronizar partículas dos pivôs excêntricos das engrenagens (se houver)
@@ -609,15 +609,38 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
   const hasGround = groundPivots.length > 0;
   const numLinks = parts.length + (hasGround ? 1 : 0);
 
-  // Contagem de juntas J1 (revolutas, fixas, sliders e engrenagens) e J2 (pino em fenda)
+  // Contagem de juntas J1 (revolutas, fixas, sliders) e J2 (pino em fenda e engrenamentos)
   const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot' && j.type !== 'gear').length;
   const numPinInSlots = joints.filter((j) => j.type === 'pin-in-slot').length;
-  const numGearJoints = joints.filter((j) => j.type === 'gear').length;
   const numFixedJoints = groundPivots.length;
   const numSliders = parts.flatMap((p) => p.pivots).filter((pv) => pv.slider?.enabled).length;
 
-  const J1 = numRevolute + numFixedJoints + numSliders + numGearJoints;
-  const J2 = numPinInSlots; // Fenda permite rotação e translação (2 graus de liberdade relativos)
+  // Contagem de engrenamentos (juntas explícitas + proximidade física)
+  const pairedGears = new Set<string>();
+  for (const j of joints) {
+    if (j.type === 'gear' && j.part1Id && j.part2Id) {
+      pairedGears.add([j.part1Id, j.part2Id].sort().join('-'));
+    }
+  }
+  const gearParts = parts.filter((p) => p.type === 'gear' && p.gear);
+  for (let i = 0; i < gearParts.length; i++) {
+    for (let k = i + 1; k < gearParts.length; k++) {
+      const g1 = gearParts[i];
+      const g2 = gearParts[k];
+      const key = [g1.id, g2.id].sort().join('-');
+      if (pairedGears.has(key)) continue;
+      const d = Math.hypot(g2.x - g1.x, g2.y - g1.y);
+      const rp1 = ((g1.gear!.module) * g1.gear!.teeth) / 2;
+      const rp2 = ((g2.gear!.module) * g2.gear!.teeth) / 2;
+      if (Math.abs(d - (rp1 + rp2)) <= Math.max(10, g1.gear!.module * 1.8)) {
+        pairedGears.add(key);
+      }
+    }
+  }
+  const totalGearMeshes = pairedGears.size;
+
+  const J1 = numRevolute + numFixedJoints + numSliders;
+  const J2 = numPinInSlots + totalGearMeshes; // Fenda e engrenamento são pares superiores (J2)
 
   // Critério de Gruebler-Kutzbach: M = 3(L - 1) - 2*J1 - J2
   const dof = numLinks > 0 ? 3 * (numLinks - 1) - 2 * J1 - J2 : 0;

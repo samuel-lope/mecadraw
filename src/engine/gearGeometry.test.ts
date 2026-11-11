@@ -200,4 +200,64 @@ describe('gearGeometry', () => {
     const diff = Math.abs(rot2 % pitchAngle);
     expect(diff).toBeCloseTo(pitchAngle / 2, 4);
   });
+
+  it('simulates gear transmission correctly when motor is placed on gear2 (driven gear)', () => {
+    // Gear 1 has 20 teeth, no motor
+    const gear1: Part = {
+      id: 1,
+      name: 'G1',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 88,
+      h: 88,
+      gear: { teeth: 20, module: 4 },
+      pivots: [{ id: 10, label: 'P1', lx: 0, ly: 0, fixed: true, motor: false }],
+    };
+
+    // Gear 2 has 40 teeth (ratio 20/40 = 0.5), has motor
+    const gear2: Part = {
+      id: 2,
+      name: 'G2',
+      type: 'gear',
+      x: 120,
+      y: 0,
+      rot: 0,
+      w: 168,
+      h: 168,
+      gear: { teeth: 40, module: 4 },
+      pivots: [{ id: 20, label: 'P2', lx: 0, ly: 0, fixed: true, motor: true }],
+    };
+
+    const parts = [gear1, gear2];
+    const sim = createSimulation(parts, [
+      {
+        id: 100,
+        type: 'gear',
+        p1: 10,
+        p2: 20,
+        part1Id: 1,
+        part2Id: 2,
+        gearRatio: 20 / 40,
+      },
+    ]);
+
+    // Step simulation by 0.1s at 60 RPM
+    stepSimulation(sim, parts, 0.1, 60, 1, {}, {});
+
+    expect(sim.lockedUp).toBe(false);
+    expect(sim.errorResidual).toBeLessThan(1.0);
+
+    const g1 = parts.find((p) => p.id === 1)!;
+    const g2 = parts.find((p) => p.id === 2)!;
+
+    // G2 rotated by omega * dt
+    const expectedDTheta2 = 2 * Math.PI * 0.1;
+    expect(g2.rot).toBeCloseTo(expectedDTheta2, 2);
+
+    // G1 rotated in opposite direction by expectedDTheta2 / ratio = expectedDTheta2 / 0.5 = 2 * expectedDTheta2
+    const expectedDTheta1 = -expectedDTheta2 / 0.5;
+    expect(g1.rot).toBeCloseTo(expectedDTheta1, 2);
+  });
 });
