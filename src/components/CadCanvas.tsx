@@ -25,7 +25,6 @@ import {
 } from '../engine/gearGeometry';
 import {
   calculateBeltGeometry,
-  getBeltPointAtDistance,
   hitBelt,
   BeltGeometryData,
 } from '../engine/beltGeometry';
@@ -152,26 +151,32 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     cw: number,
     ch: number
   ) => {
-    const beltThick = Math.max(3, 5.5 * cam.zoom);
-    const sampleSteps = 80;
+    const sC1 = worldToScreen(geom.c1, cam, cw, ch);
+    const sC2 = worldToScreen(geom.c2, cam, cw, ch);
+    const sT1a = worldToScreen(geom.t1a, cam, cw, ch);
+    const sT1b = worldToScreen(geom.t1b, cam, cw, ch);
+    const sT2b = worldToScreen(geom.t2b, cam, cw, ch);
+
+    const sR1 = geom.r1 * cam.zoom;
+    const sR2 = geom.r2 * cam.zoom;
+    const beltThick = Math.max(4, 5.5 * cam.zoom);
+
+    // Ângulos das tangentes externas
+    const alphaA = geom.thetaC + Math.PI / 2 - geom.beta;
+    const alphaB = geom.thetaC - Math.PI / 2 + geom.beta;
 
     ctx.save();
 
-    // Traçado do caminho contínuo da correia
+    // 1. Caminho contínuo matematicamente exato da correia fechada
     const beltPath = new Path2D();
-    const pt0 = getBeltPointAtDistance(geom, 0);
-    const s0 = worldToScreen({ x: pt0.x, y: pt0.y }, cam, cw, ch);
-    beltPath.moveTo(s0.x, s0.y);
-
-    for (let i = 1; i <= sampleSteps; i++) {
-      const s = (i / sampleSteps) * geom.totalLength;
-      const pt = getBeltPointAtDistance(geom, s);
-      const sp = worldToScreen({ x: pt.x, y: pt.y }, cam, cw, ch);
-      beltPath.lineTo(sp.x, sp.y);
-    }
+    beltPath.moveTo(sT1b.x, sT1b.y);
+    beltPath.lineTo(sT2b.x, sT2b.y);
+    beltPath.arc(sC2.x, sC2.y, sR2, alphaB, alphaA, false);
+    beltPath.lineTo(sT1a.x, sT1a.y);
+    beltPath.arc(sC1.x, sC1.y, sR1, alphaA, alphaB, false);
     beltPath.closePath();
 
-    // 1. Halo de Seleção / Hover
+    // 2. Halo de Seleção / Hover
     if (isSelected || isHovered) {
       ctx.strokeStyle = isSelected ? '#3b82f6' : '#10b981';
       ctx.lineWidth = beltThick + 8;
@@ -180,63 +185,31 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.stroke(beltPath);
     }
 
-    // 2. Dorso da Correia (Borracha Industrial Antracite)
+    // 3. Dorso da Correia (Banda grafite/antracite #1e293b)
     ctx.strokeStyle = '#1e293b';
     ctx.lineWidth = beltThick;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(beltPath);
 
-    // Filete de reforço de aramida / nylon (linha central sutil)
-    ctx.strokeStyle = isSelected ? '#60a5fa' : '#475569';
-    ctx.lineWidth = Math.max(1, 1.2 * cam.zoom);
+    // 4. Pontilhado Dinâmico dos Dentes (Ciano fluorescente #38bdf8 em movimento no sentido do giro)
+    ctx.strokeStyle = isSelected ? '#93c5fd' : '#38bdf8';
+    ctx.lineWidth = Math.max(2, 2.5 * cam.zoom);
+    ctx.setLineDash([5 * cam.zoom, 4 * cam.zoom]);
+    ctx.lineDashOffset = -gear1.rot * geom.r1 * cam.zoom;
     ctx.stroke(beltPath);
+    ctx.setLineDash([]);
 
-    // 3. Dentes da Correia (Timing Belt Teeth)
-    const pitch = geom.pitch;
-    const toothLinearOffset = ((gear1.rot * geom.r1) % pitch + pitch) % pitch;
-    const totalTeeth = Math.floor(geom.totalLength / pitch);
-    const toothHeight = Math.min(beltThick * 0.75, Math.max(2, 0.7 * geom.m * cam.zoom));
-
-    ctx.fillStyle = isSelected ? '#93c5fd' : '#cbd5e1';
-
-    for (let i = 0; i < totalTeeth; i++) {
-      const sDist = i * pitch + toothLinearOffset;
-      const pt = getBeltPointAtDistance(geom, sDist);
-      const sPt = worldToScreen({ x: pt.x, y: pt.y }, cam, cw, ch);
-
-      ctx.save();
-      ctx.translate(sPt.x, sPt.y);
-      ctx.rotate(pt.angle);
-
-      const halfBase = Math.max(1.5, pitch * 0.35 * cam.zoom);
-      const halfTip = Math.max(1.0, pitch * 0.22 * cam.zoom);
-      const depth = toothHeight;
-
-      ctx.beginPath();
-      ctx.moveTo(-halfBase, 0);
-      ctx.lineTo(-halfTip, depth);
-      ctx.lineTo(halfTip, depth);
-      ctx.lineTo(halfBase, 0);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    // 4. Badge Informativo no Centro do Ramo Superior
-    const midSpanWorld: Point2D = {
-      x: (geom.t1a.x + geom.t2a.x) / 2,
-      y: (geom.t1a.y + geom.t2a.y) / 2,
-    };
-    const sMid = worldToScreen(midSpanWorld, cam, cw, ch);
+    // 5. Badge Informativo no Centro do Ramo Superior
+    const sMidX = (sT1b.x + sT2b.x) / 2;
+    const sMidY = (sT1b.y + sT2b.y) / 2;
 
     const badgeText = `Correia: L=${geom.totalLength.toFixed(1)}mm | ${geom.teethCount}D (${gear1.gear?.teeth || 20}:${gear2.gear?.teeth || 20})`;
     ctx.font = 'bold 9px monospace';
     const bW = ctx.measureText(badgeText).width + 12;
     const bH = 16;
-    const bX = sMid.x - bW / 2;
-    const bY = sMid.y - 20;
+    const bX = sMidX - bW / 2;
+    const bY = sMidY - 18;
 
     ctx.fillStyle = isSelected ? 'rgba(30, 58, 138, 0.94)' : 'rgba(15, 23, 42, 0.88)';
     ctx.beginPath();
@@ -249,7 +222,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     ctx.fillStyle = isSelected ? '#bfdbfe' : '#e2e8f0';
     ctx.textAlign = 'center';
-    ctx.fillText(badgeText, sMid.x, bY + 11);
+    ctx.fillText(badgeText, sMidX, bY + 11);
 
     ctx.restore();
   };
