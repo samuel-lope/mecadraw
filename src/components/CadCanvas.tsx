@@ -192,8 +192,10 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     // 4. Pontilhado Dinâmico dos Dentes (Ciano fluorescente #38bdf8 em movimento no sentido do giro)
     ctx.strokeStyle = isSelected ? '#93c5fd' : '#38bdf8';
     ctx.lineWidth = Math.max(2, 2.5 * cam.zoom);
-    ctx.setLineDash([5 * cam.zoom, 4 * cam.zoom]);
-    ctx.lineDashOffset = -gear1.rot * geom.r1 * cam.zoom;
+    const dashCount = Math.max(8, Math.round(geom.totalLength / 9));
+    const dashPeriod = (geom.totalLength / dashCount) * cam.zoom;
+    ctx.setLineDash([dashPeriod * 0.55, dashPeriod * 0.45]);
+    ctx.lineDashOffset = gear1.rot * geom.r1 * cam.zoom;
     ctx.stroke(beltPath);
     ctx.setLineDash([]);
 
