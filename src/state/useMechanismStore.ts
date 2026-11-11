@@ -586,10 +586,10 @@ export const useMechanismStore = () => {
         });
       });
 
-      // Atualizar gearRatio nas juntas
+      // Atualizar gearRatio nas juntas (engrenagens e correias)
       setJoints((prev) =>
         prev.map((j) => {
-          if (j.type !== 'gear' || !j.part1Id || !j.part2Id) return j;
+          if ((j.type !== 'gear' && j.type !== 'belt') || !j.part1Id || !j.part2Id) return j;
           if (j.part1Id === partId || j.part2Id === partId) {
             const p1 = parts.find((p) => p.id === j.part1Id);
             const p2 = parts.find((p) => p.id === j.part2Id);
@@ -734,6 +734,64 @@ export const useMechanismStore = () => {
       setSimLockedUp(false);
     },
     [recordSnapshot]
+  );
+
+  const connectBelt = useCallback(
+    (part1Id: number, part2Id: number) => {
+      if (part1Id === part2Id) return;
+      const p1 = parts.find((p) => p.id === part1Id);
+      const p2 = parts.find((p) => p.id === part2Id);
+      if (!p1?.gear || !p2?.gear) return;
+
+      recordSnapshot();
+
+      // Sincronizar módulo métrico da polia 2 se diferente para garantir engrazamento dos dentes da correia
+      if (p2.gear.module !== p1.gear.module) {
+        setParts((prev) =>
+          prev.map((p) => {
+            if (p.id !== part2Id || !p.gear) return p;
+            const newGear = { ...p.gear, module: p1.gear!.module };
+            const r = calculateGearRadii(newGear.teeth, newGear.module);
+            return {
+              ...p,
+              gear: newGear,
+              w: r.addendum * 2,
+              h: r.addendum * 2,
+            };
+          })
+        );
+      }
+
+      const ratio = p1.gear.teeth / p2.gear.teeth;
+      const newJoint: Joint = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        p1: p1.pivots[0]?.id || 0,
+        p2: p2.pivots[0]?.id || 0,
+        part1Id,
+        part2Id,
+        gearRatio: ratio,
+        type: 'belt',
+        beltWidth: 6,
+      };
+
+      setJoints((prev) => [
+        ...prev.filter(
+          (j) =>
+            !(
+              j.type === 'belt' &&
+              ((j.part1Id === part1Id && j.part2Id === part2Id) ||
+                (j.part1Id === part2Id && j.part2Id === part1Id))
+            )
+        ),
+        newJoint,
+      ]);
+
+      setSelection({ jointId: newJoint.id });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
+    },
+    [parts, recordSnapshot]
   );
 
   // Toggles Rápidos no Inspetor / Floating Bar (com exclusão mútua consistente)
@@ -1100,6 +1158,7 @@ export const useMechanismStore = () => {
     addGearPart,
     updateGear,
     connectGears,
+    connectBelt,
     lockCoaxialGears,
     unlockCoaxialGears,
     togglePivotGround,

@@ -58,6 +58,13 @@ export interface SimWeld {
   initialDiff: number; // diferenca angular entre part1 e part2 (geralmente 0)
 }
 
+export interface SimBelt {
+  part1Id: number;
+  part2Id: number;
+  ratio: number;
+  initialDiff: number;
+}
+
 export interface SimulationInstance {
   particles: Record<number, SimParticle>;
   distanceConstraints: DistanceConstraint[];
@@ -65,6 +72,7 @@ export interface SimulationInstance {
   pinInSlots: SimPinInSlot[];
   gears: SimGear[];
   welds: SimWeld[];
+  belts: SimBelt[];
   motors: SimMotor[];
   time: number;
   errorResidual: number;
@@ -78,6 +86,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
   const simPinInSlots: SimPinInSlot[] = [];
   const simGears: SimGear[] = [];
   const simWelds: SimWeld[] = [];
+  const simBelts: SimBelt[] = [];
   const motors: SimMotor[] = [];
 
   // 1. Inicializar partículas a partir dos pivôs das peças
@@ -184,6 +193,15 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
           simJoints.push([j.p1, j.p2]);
         }
       }
+    } else if (j.type === 'belt' && j.part1Id && j.part2Id) {
+      const g1 = parts.find((p) => p.id === j.part1Id);
+      const g2 = parts.find((p) => p.id === j.part2Id);
+      if (g1?.gear && g2?.gear) {
+        const ratio = g1.gear.teeth / g2.gear.teeth;
+        // Correia aberta síncrona: rotação no mesmo sentido
+        const initialDiff = g2.rot - ratio * g1.rot;
+        simBelts.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
+      }
     } else if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
       simJoints.push([j.p1, j.p2]);
     }
@@ -219,6 +237,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     pinInSlots: simPinInSlots,
     gears: simGears,
     welds: simWelds,
+    belts: simBelts,
     motors,
     time: 0,
     errorResidual: 0,
@@ -553,6 +572,56 @@ export const stepSimulation = (
               sp.y = p.y + ry;
             }
           });
+        }
+      }
+    }
+
+    // G. Restrições de Transmissão por Correia Dentada (Belts)
+    if (sim.belts) {
+      for (const b of sim.belts) {
+        const p1 = parts.find((p) => p.id === b.part1Id);
+        const p2 = parts.find((p) => p.id === b.part2Id);
+        if (!p1 || !p2) continue;
+
+        if (p1.pivots.length >= 2) {
+          p1.rot = computePartPose(p1, sim.particles).rot;
+        }
+        if (p2.pivots.length >= 2) {
+          p2.rot = computePartPose(p2, sim.particles).rot;
+        }
+
+        // Correia aberta: rotação no mesmo sentido!
+        const desiredRot2 = b.ratio * p1.rot + b.initialDiff;
+        let rotErr = p2.rot - desiredRot2;
+        rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
+
+        const equivLinearErr = Math.abs(rotErr) * ((p2.gear?.module || 4) * (p2.gear?.teeth || 20) * 0.5);
+        maxResidual = Math.max(maxResidual, equivLinearErr);
+
+        const p1Motor = p1.pivots.some((pv) => pv.motor);
+        const p2Motor = p2.pivots.some((pv) => pv.motor);
+
+        if (p1Motor && !p2Motor) {
+          p2.rot -= rotErr;
+        } else if (!p1Motor && p2Motor) {
+          p1.rot += rotErr / b.ratio;
+        } else {
+          p2.rot -= rotErr * 0.5;
+          p1.rot += (rotErr / b.ratio) * 0.5;
+        }
+
+        // Sincronizar partículas dos pivôs excêntricos das engrenagens (se houver)
+        for (const p of [p1, p2]) {
+          if (p.pivots.length > 1) {
+            p.pivots.forEach((pv) => {
+              const sp = sim.particles[pv.id];
+              if (sp && !sp.fixed) {
+                const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
+                sp.x = p.x + rx;
+                sp.y = p.y + ry;
+              }
+            });
+          }
         }
       }
     }

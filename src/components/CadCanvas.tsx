@@ -23,6 +23,12 @@ import {
   generateGearOutline,
   getIdealMeshedPosition,
 } from '../engine/gearGeometry';
+import {
+  calculateBeltGeometry,
+  getBeltPointAtDistance,
+  hitBelt,
+  BeltGeometryData,
+} from '../engine/beltGeometry';
 
 interface CadCanvasProps {
   store: MechanismStore;
@@ -83,6 +89,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
   const [hoveredPivot, setHoveredPivot] = useState<{ part: Part; pivot: Pivot } | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{ part: Part; slot: PartSlot } | null>(null);
   const [hoveredPart, setHoveredPart] = useState<Part | null>(null);
+  const [hoveredJointId, setHoveredJointId] = useState<number | null>(null);
+  const [pendingBeltGearId, setPendingBeltGearId] = useState<number | null>(null);
 
   const {
     parts,
@@ -103,11 +111,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     addPart,
     updatePart,
     connectJoint,
+    disconnectJoint,
     addSlotToPart,
     deleteSlot,
     connectPinToSlot,
     addGearPart,
     connectGears,
+    connectBelt,
     lockCoaxialGears,
     unlockCoaxialGears,
     pendingJointPivot,
@@ -121,6 +131,128 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     togglePartVisibility,
     showAllParts,
   } = store;
+
+  const mouseWorldRef = useRef<Point2D>({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (tool !== 'belt') {
+      setPendingBeltGearId(null);
+    }
+  }, [tool]);
+
+  // Função auxiliar de renderização da Correia Dentada (Timing Belt)
+  const drawTimingBelt = (
+    ctx: CanvasRenderingContext2D,
+    geom: BeltGeometryData,
+    gear1: Part,
+    gear2: Part,
+    isSelected: boolean,
+    isHovered: boolean,
+    cam: typeof camera,
+    cw: number,
+    ch: number
+  ) => {
+    const beltThick = Math.max(3, 5.5 * cam.zoom);
+    const sampleSteps = 80;
+
+    ctx.save();
+
+    // Traçado do caminho contínuo da correia
+    const beltPath = new Path2D();
+    const pt0 = getBeltPointAtDistance(geom, 0);
+    const s0 = worldToScreen({ x: pt0.x, y: pt0.y }, cam, cw, ch);
+    beltPath.moveTo(s0.x, s0.y);
+
+    for (let i = 1; i <= sampleSteps; i++) {
+      const s = (i / sampleSteps) * geom.totalLength;
+      const pt = getBeltPointAtDistance(geom, s);
+      const sp = worldToScreen({ x: pt.x, y: pt.y }, cam, cw, ch);
+      beltPath.lineTo(sp.x, sp.y);
+    }
+    beltPath.closePath();
+
+    // 1. Halo de Seleção / Hover
+    if (isSelected || isHovered) {
+      ctx.strokeStyle = isSelected ? '#3b82f6' : '#10b981';
+      ctx.lineWidth = beltThick + 8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke(beltPath);
+    }
+
+    // 2. Dorso da Correia (Borracha Industrial Antracite)
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = beltThick;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(beltPath);
+
+    // Filete de reforço de aramida / nylon (linha central sutil)
+    ctx.strokeStyle = isSelected ? '#60a5fa' : '#475569';
+    ctx.lineWidth = Math.max(1, 1.2 * cam.zoom);
+    ctx.stroke(beltPath);
+
+    // 3. Dentes da Correia (Timing Belt Teeth)
+    const pitch = geom.pitch;
+    const toothLinearOffset = ((gear1.rot * geom.r1) % pitch + pitch) % pitch;
+    const totalTeeth = Math.floor(geom.totalLength / pitch);
+    const toothHeight = Math.min(beltThick * 0.75, Math.max(2, 0.7 * geom.m * cam.zoom));
+
+    ctx.fillStyle = isSelected ? '#93c5fd' : '#cbd5e1';
+
+    for (let i = 0; i < totalTeeth; i++) {
+      const sDist = i * pitch + toothLinearOffset;
+      const pt = getBeltPointAtDistance(geom, sDist);
+      const sPt = worldToScreen({ x: pt.x, y: pt.y }, cam, cw, ch);
+
+      ctx.save();
+      ctx.translate(sPt.x, sPt.y);
+      ctx.rotate(pt.angle);
+
+      const halfBase = Math.max(1.5, pitch * 0.35 * cam.zoom);
+      const halfTip = Math.max(1.0, pitch * 0.22 * cam.zoom);
+      const depth = toothHeight;
+
+      ctx.beginPath();
+      ctx.moveTo(-halfBase, 0);
+      ctx.lineTo(-halfTip, depth);
+      ctx.lineTo(halfTip, depth);
+      ctx.lineTo(halfBase, 0);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // 4. Badge Informativo no Centro do Ramo Superior
+    const midSpanWorld: Point2D = {
+      x: (geom.t1a.x + geom.t2a.x) / 2,
+      y: (geom.t1a.y + geom.t2a.y) / 2,
+    };
+    const sMid = worldToScreen(midSpanWorld, cam, cw, ch);
+
+    const badgeText = `Correia: L=${geom.totalLength.toFixed(1)}mm | ${geom.teethCount}D (${gear1.gear?.teeth || 20}:${gear2.gear?.teeth || 20})`;
+    ctx.font = 'bold 9px monospace';
+    const bW = ctx.measureText(badgeText).width + 12;
+    const bH = 16;
+    const bX = sMid.x - bW / 2;
+    const bY = sMid.y - 20;
+
+    ctx.fillStyle = isSelected ? 'rgba(30, 58, 138, 0.94)' : 'rgba(15, 23, 42, 0.88)';
+    ctx.beginPath();
+    ctx.roundRect(bX, bY, bW, bH, 4);
+    ctx.fill();
+
+    ctx.strokeStyle = isSelected ? '#60a5fa' : '#64748b';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = isSelected ? '#bfdbfe' : '#e2e8f0';
+    ctx.textAlign = 'center';
+    ctx.fillText(badgeText, sMid.x, bY + 11);
+
+    ctx.restore();
+  };
 
   // Render Loop & Simulação
   useEffect(() => {
@@ -143,7 +275,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [simRunning, stepSim, stepPausedTrails, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot, telemetryHoverPoint]);
+  }, [simRunning, stepSim, stepPausedTrails, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, hoveredJointId, pendingBeltGearId, pendingJointPivot, telemetryHoverPoint]);
 
   // Função Principal de Renderização
   const drawCanvas = useCallback(() => {
@@ -507,6 +639,58 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.restore();
       });
     });
+
+    // 4.5. Correias Dentadas (Timing Belts)
+    joints.forEach((j) => {
+      if (j.type === 'belt' && j.part1Id && j.part2Id) {
+        const g1 = parts.find((p) => p.id === j.part1Id);
+        const g2 = parts.find((p) => p.id === j.part2Id);
+        if (!g1 || !g2 || g1.hidden || g2.hidden) return;
+        const geom = calculateBeltGeometry(g1, g2);
+        if (geom) {
+          const isSelected = selection.jointId === j.id;
+          const isHovered = hoveredJointId === j.id;
+          drawTimingBelt(ctx, geom, g1, g2, isSelected, isHovered, camera, w, h);
+        }
+      }
+    });
+
+    // Preview de criação de correia ativa
+    if (tool === 'belt' && pendingBeltGearId) {
+      const g1 = parts.find((p) => p.id === pendingBeltGearId);
+      if (g1) {
+        const sC1 = worldToScreen({ x: g1.x, y: g1.y }, camera, w, h);
+        ctx.save();
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.arc(sC1.x, sC1.y, (g1.w / 2) * camera.zoom + 8, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.restore();
+
+        if (hoveredPart && hoveredPart.type === 'gear' && hoveredPart.id !== pendingBeltGearId) {
+          const previewGeom = calculateBeltGeometry(g1, hoveredPart);
+          if (previewGeom) {
+            ctx.save();
+            ctx.globalAlpha = 0.55;
+            drawTimingBelt(ctx, previewGeom, g1, hoveredPart, false, true, camera, w, h);
+            ctx.restore();
+          }
+        } else {
+          const sMouse = worldToScreen(mouseWorldRef.current, camera, w, h);
+          ctx.save();
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(sC1.x, sC1.y);
+          ctx.lineTo(sMouse.x, sMouse.y);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+    }
 
     // 5. Juntas Conectadas (Indicadores Visuais Claros)
     joints.forEach((j) => {
@@ -1073,6 +1257,25 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       return;
     }
 
+    // Ferramenta Correia Dentada (Timing Belt)
+    if (tool === 'belt') {
+      const visibleParts = parts.filter((p) => !p.hidden);
+      const clickedPart = hitPart(worldPt, visibleParts);
+      if (clickedPart && clickedPart.type === 'gear' && clickedPart.gear) {
+        if (!pendingBeltGearId) {
+          setPendingBeltGearId(clickedPart.id);
+        } else if (pendingBeltGearId !== clickedPart.id) {
+          recordSnapshot();
+          connectBelt(pendingBeltGearId, clickedPart.id);
+          setPendingBeltGearId(null);
+          setTool('sel');
+        }
+      } else {
+        setPendingBeltGearId(null);
+      }
+      return;
+    }
+
     // Ferramentas de Aplicação Rápida em Eixos:
     const visibleParts = parts.filter((p) => !p.hidden);
     const clickedPivot = hitPivot(worldPt, visibleParts, camera);
@@ -1170,6 +1373,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     // Ferramenta Excluir
     if (tool === 'del') {
+      if (hoveredJointId) {
+        recordSnapshot();
+        disconnectJoint(hoveredJointId);
+        setHoveredJointId(null);
+        setSelection({});
+        return;
+      }
       if (clickedPivot) {
         store.deletePivot(clickedPivot.part.id, clickedPivot.pivot.id);
       } else if (clickedSlot) {
@@ -1309,6 +1519,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         return;
       }
 
+      // 2.5 Clicou em uma Correia Dentada?
+      if (hoveredJointId) {
+        recordSnapshot();
+        setSelection({ jointId: hoveredJointId });
+        return;
+      }
+
       // 3. Clicou em uma peça existente?
       if (clickedPart) {
         recordSnapshot();
@@ -1380,6 +1597,23 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     setHoveredPivot(hitPivot(rawWorld, visibleParts, camera));
     setHoveredSlot(hitSlot(rawWorld, visibleParts, camera));
     setHoveredPart(hitPart(rawWorld, visibleParts));
+
+    // Hover em Correias Dentadas
+    let hitJointId: number | null = null;
+    const beltJoints = joints.filter((j) => j.type === 'belt' && j.part1Id && j.part2Id);
+    for (const bj of beltJoints) {
+      const g1 = parts.find((p) => p.id === bj.part1Id);
+      const g2 = parts.find((p) => p.id === bj.part2Id);
+      if (g1 && g2 && !g1.hidden && !g2.hidden) {
+        const geom = calculateBeltGeometry(g1, g2);
+        if (geom && hitBelt(rawWorld, geom, 8 / camera.zoom)) {
+          hitJointId = bj.id;
+          break;
+        }
+      }
+    }
+    setHoveredJointId(hitJointId);
+    mouseWorldRef.current = rawWorld;
 
     if (!dragState) return;
 
@@ -1712,7 +1946,18 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       <canvas
         ref={canvasRef}
         className="w-full h-full block cursor-crosshair touch-none"
-        style={{ cursor: tool === 'sel' ? (dragState?.mode === 'pan' ? 'grabbing' : 'default') : 'crosshair' }}
+        style={{
+          cursor:
+            hoveredJointId
+              ? 'pointer'
+              : tool === 'belt'
+              ? 'crosshair'
+              : tool === 'sel'
+              ? dragState?.mode === 'pan'
+                ? 'grabbing'
+                : 'default'
+              : 'crosshair',
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

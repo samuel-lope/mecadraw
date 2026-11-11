@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { MechanismStore } from '../state/useMechanismStore';
 import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff } from 'lucide-react';
 import { calculateGearRadii } from '../engine/gearGeometry';
+import { calculateBeltGeometry } from '../engine/beltGeometry';
 
 interface InspectorPanelProps {
   store: MechanismStore;
@@ -24,6 +25,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     connectPinToSlot,
     updateGear,
     connectGears,
+    connectBelt,
     lockCoaxialGears,
     unlockCoaxialGears,
     camera,
@@ -45,7 +47,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
 
   // Outros alvos (eixos, fendas e engrenagens) disponíveis para conexão
   const otherTargets: {
-    type: 'pivot' | 'slot' | 'gear' | 'weld';
+    type: 'pivot' | 'slot' | 'gear' | 'weld' | 'belt';
     id: string;
     label: string;
     part: typeof parts[0];
@@ -84,6 +86,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             part: p,
           });
           otherTargets.push({
+            type: 'belt',
+            id: `belt:${p.id}`,
+            label: `Correia Dentada c/ Peça ${p.letter || 'A'} (${p.gear.teeth}D)`,
+            part: p,
+          });
+          otherTargets.push({
             type: 'weld',
             id: `weld:${p.id}`,
             label: `Travar no Mesmo Eixo com Peça ${p.letter || 'A'} (Solidária)`,
@@ -95,9 +103,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
   }
 
   // Juntas conectadas ao pivô ou à engrenagem selecionada
-  const connectedJoints = selPivot
+  const connectedJoints = selPart
     ? joints
-        .filter((j) => j.p1 === selPivot.id || j.p2 === selPivot.id)
+        .filter((j) => {
+          if (selPivot && (j.p1 === selPivot.id || j.p2 === selPivot.id)) return true;
+          return (
+            (j.type === 'gear' || j.type === 'weld' || j.type === 'belt') &&
+            (j.part1Id === selPart.id || j.part2Id === selPart.id)
+          );
+        })
         .map((j) => {
           if (j.type === 'pin-in-slot' && j.slotId) {
             let partnerInfo = 'Fenda Desconhecida';
@@ -114,7 +128,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             const partnerPart = parts.find((p) => p.id === partnerPartId);
             return {
               joint: j,
-              partnerInfo: `Engrenagem ${partnerPart?.letter || 'A'} (i = ${(j.gearRatio || 1).toFixed(2)})`,
+              partnerInfo: `Engrenada c/ Peça ${partnerPart?.letter || 'A'} (i = ${(j.gearRatio || 1).toFixed(2)})`,
+              isSlot: false,
+            };
+          }
+          if (j.type === 'belt') {
+            const partnerPartId = (selPart && j.part1Id === selPart.id) ? j.part2Id : j.part1Id;
+            const partnerPart = parts.find((p) => p.id === partnerPartId);
+            return {
+              joint: j,
+              partnerInfo: `Correia Dentada c/ Peça ${partnerPart?.letter || 'B'} (${partnerPart?.gear?.teeth || 20}D)`,
               isSlot: false,
             };
           }
@@ -127,7 +150,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               isSlot: false,
             };
           }
-          const partnerId = j.p1 === selPivot.id ? j.p2 : j.p1;
+          const partnerId = selPivot ? (j.p1 === selPivot.id ? j.p2 : j.p1) : j.p2;
           let partnerInfo = 'Eixo Desconhecido';
           for (const p of parts) {
             for (const pv of p.pivots) {
@@ -141,6 +164,92 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     : [];
 
   if (!selPart) {
+    const selJoint = joints.find((j) => j.id === selection.jointId);
+    if (selJoint && selJoint.type === 'belt') {
+      const p1 = parts.find((p) => p.id === selJoint.part1Id);
+      const p2 = parts.find((p) => p.id === selJoint.part2Id);
+      const geom = p1 && p2 ? calculateBeltGeometry(p1, p2) : null;
+
+      return (
+        <aside className="w-72 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 p-4 flex flex-col gap-4 text-xs select-none overflow-y-auto">
+          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-blue-600" />
+              <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-100">
+                Correia Dentada
+              </h3>
+            </div>
+            <button
+              onClick={() => {
+                disconnectJoint(selJoint.id);
+                setSelection({});
+              }}
+              className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors"
+              title="Excluir Correia"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+
+          {geom && p1 && p2 ? (
+            <div className="flex flex-col gap-3">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700/60 flex flex-col gap-2">
+                <span className="font-semibold text-slate-800 dark:text-slate-200 text-[11px] uppercase tracking-wider">
+                  Polias Conectadas
+                </span>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Polia 1 ({p1.letter || 'A'}):</span>
+                  <span className="font-mono font-medium">{p1.gear?.teeth} dentes (m={p1.gear?.module})</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Polia 2 ({p2.letter || 'B'}):</span>
+                  <span className="font-mono font-medium">{p2.gear?.teeth} dentes (m={p2.gear?.module})</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300 pt-1 border-t border-slate-200 dark:border-slate-700">
+                  <span>Relação de Transmissão:</span>
+                  <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+                    {geom.ratio >= 1 ? `1 : ${(1 / geom.ratio).toFixed(2)}` : `${geom.ratio.toFixed(2)} : 1`} ({geom.ratio.toFixed(2)})
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700/60 flex flex-col gap-2">
+                <span className="font-semibold text-slate-800 dark:text-slate-200 text-[11px] uppercase tracking-wider">
+                  Dados Métricos da Correia
+                </span>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Comprimento Total (L):</span>
+                  <span className="font-mono font-bold text-slate-800 dark:text-slate-100">{geom.totalLength.toFixed(1)} mm</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Quantidade de Dentes:</span>
+                  <span className="font-mono font-medium">{geom.teethCount} dentes</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Passo Circular (p = π·m):</span>
+                  <span className="font-mono font-medium">{geom.pitch.toFixed(2)} mm</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Distância entre Centros (d):</span>
+                  <span className="font-mono font-medium">{geom.d.toFixed(1)} mm</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                  <span>Comprimento do Vão Reto:</span>
+                  <span className="font-mono font-medium">{geom.spanLength.toFixed(1)} mm</span>
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded text-[11px] text-blue-700 dark:text-blue-300">
+                A correia dentada transmite rotação no mesmo sentido. Arrastar qualquer uma das engrenagens ajusta dinamicamente o comprimento e a quantidade de dentes.
+              </div>
+            </div>
+          ) : (
+            <div className="text-slate-400">Engrenagens da correia indisponíveis.</div>
+          )}
+        </aside>
+      );
+    }
+
     return (
       <aside className="w-72 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 p-4 flex flex-col gap-3 text-xs text-slate-500 select-none overflow-y-auto">
         <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-100">Propriedades</h3>
@@ -982,6 +1091,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                         connectPinToSlot({ part: selPart, pivot: selPivot }, { part: target.part, slot: target.slot });
                       } else if (target.type === 'gear') {
                         connectGears(selPart, target.part);
+                      } else if (target.type === 'belt') {
+                        connectBelt(selPart.id, target.part.id);
                       } else if (target.type === 'weld') {
                         lockCoaxialGears(selPart.id, target.part.id);
                       }

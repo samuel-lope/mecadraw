@@ -75,10 +75,12 @@ export interface Joint {
   p1: number; // ID do pivô A
   p2?: number; // ID do pivô B (se revoluta)
   slotId?: number; // ID da fenda (se pino-em-fenda)
-  part1Id?: number; // ID da peça 1 (se engrenamento)
-  part2Id?: number; // ID da peça 2 (se engrenamento)
-  gearRatio?: number; // Relação de transmissão z1 / z2 (se engrenamento)
-  type?: 'revolute' | 'weld' | 'pin-in-slot' | 'gear';
+  part1Id?: number; // ID da peça 1 (se engrenamento ou correia)
+  part2Id?: number; // ID da peça 2 (se engrenamento ou correia)
+  gearRatio?: number; // Relação de transmissão z1 / z2 (se engrenamento ou correia)
+  type?: 'revolute' | 'weld' | 'pin-in-slot' | 'gear' | 'belt';
+  beltWidth?: number; // Largura visual da correia em mm (padrão 6mm)
+  color?: string;
 }
 
 export type ToolType =
@@ -88,6 +90,7 @@ export type ToolType =
   | 'circle'
   | 'tri'
   | 'gear'
+  | 'belt'
   | 'axis'
   | 'slot'
   | 'joint'

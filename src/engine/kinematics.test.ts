@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { analyzeMechanism, createSimulation, stepSimulation, stepPausedTrails } from './kinematics';
 import { createBar, PRESETS } from './presets';
 import { pivotWorldPos } from './geometry';
-import { Part, TrailPoint } from '../types/mechanism';
+import { Joint, Part, TrailPoint } from '../types/mechanism';
 
 describe('Kinematics Engine', () => {
   it('correctly calculates DOF and Grashof for a four-bar linkage', () => {
@@ -301,5 +301,66 @@ describe('Kinematics Engine', () => {
     stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry, 1.0);
     expect(sim.time).toBeGreaterThan(timeAtPause);
     expect(sim.lockedUp).toBe(false);
+  });
+
+  it('transmite rotação sincronizada à distância via Correia Dentada (mesmo sentido)', () => {
+    const m = 4;
+    // G1: z=10, motor a 60 RPM, centro em x=0, y=0
+    const g1: Part = {
+      id: 1,
+      name: 'Polia Motora',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 48,
+      h: 48,
+      gear: { teeth: 10, module: m },
+      pivots: [{ id: 10, label: 'A1', lx: 0, ly: 0, fixed: true, motor: true, motorRpm: 60 }],
+    };
+
+    // G2: z=20, movida, centro em x=250, y=0
+    const g2: Part = {
+      id: 2,
+      name: 'Polia Movida',
+      type: 'gear',
+      x: 250,
+      y: 0,
+      rot: 0,
+      w: 88,
+      h: 88,
+      gear: { teeth: 20, module: m },
+      pivots: [{ id: 20, label: 'B1', lx: 0, ly: 0, fixed: true }],
+    };
+
+    const parts = [g1, g2];
+    const joints: Joint[] = [
+      {
+        id: 101,
+        type: 'belt',
+        p1: 10,
+        p2: 20,
+        part1Id: 1,
+        part2Id: 2,
+        gearRatio: 10 / 20,
+      },
+    ];
+
+    const sim = createSimulation(parts, joints);
+    expect(sim.belts.length).toBe(1);
+
+    // Passo de 0.1s a 60 RPM
+    stepSimulation(sim, parts, 0.1, 60, 1, {}, {});
+
+    expect(sim.lockedUp).toBe(false);
+    expect(sim.errorResidual).toBeLessThan(0.5);
+
+    // G1 gira 2*pi * (60/60) * 0.1 = 0.2*pi rad
+    const expected1 = 2 * Math.PI * 0.1;
+    expect(g1.rot).toBeCloseTo(expected1, 2);
+
+    // G2 gira no MESMO SENTIDO (correia aberta) com metade da velocidade angular (z1/z2 = 10/20 = 0.5)
+    const expected2 = expected1 * (10 / 20);
+    expect(g2.rot).toBeCloseTo(expected2, 2);
   });
 });

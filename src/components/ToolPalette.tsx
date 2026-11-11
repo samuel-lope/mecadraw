@@ -37,6 +37,18 @@ const TOOLS: ToolDef[] = [
   { id: 'circle', label: 'Círculo', icon: <Circle className="w-4 h-4" />, shortcut: 'C' },
   { id: 'tri', label: 'Triângulo', icon: <Triangle className="w-4 h-4" />, shortcut: 'T' },
   { id: 'gear', label: 'Engrenagem', icon: <Settings className="w-4 h-4" />, shortcut: 'E' },
+  {
+    id: 'belt',
+    label: 'Correia',
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="7" cy="12" r="3" />
+        <circle cx="17" cy="12" r="3" />
+        <path d="M7 9h10M7 15h10" />
+      </svg>
+    ),
+    shortcut: 'D',
+  },
   { id: 'axis', label: '+ Eixo', icon: <PlusCircle className="w-4 h-4" />, shortcut: 'A' },
   { id: 'slot', label: '+ Fenda', icon: <RectangleHorizontal className="w-4 h-4" />, shortcut: 'F' },
   { id: 'joint', label: 'Junta', icon: <Link2 className="w-4 h-4" />, shortcut: 'J' },
