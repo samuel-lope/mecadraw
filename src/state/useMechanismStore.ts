@@ -119,6 +119,9 @@ export const useMechanismStore = () => {
     setTrails({});
     setTelemetry({});
     setSelection({});
+    simInstanceRef.current = null;
+    simSnapshotRef.current = null;
+    setSimLockedUp(false);
   }, [parts, joints]);
 
   const redo = useCallback(() => {
@@ -135,6 +138,9 @@ export const useMechanismStore = () => {
     setTrails({});
     setTelemetry({});
     setSelection({});
+    simInstanceRef.current = null;
+    simSnapshotRef.current = null;
+    setSimLockedUp(false);
   }, [parts, joints]);
 
   // Controles de Simulação
@@ -238,6 +244,9 @@ export const useMechanismStore = () => {
       recordSnapshot();
       setParts((prev) => syncPartsAndPivots([...prev, newPart]));
       setSelection({ partId: newPart.id });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -245,6 +254,9 @@ export const useMechanismStore = () => {
   const updatePart = useCallback(
     (partId: number, updater: (p: Part) => Part) => {
       setParts((prev) => prev.map((p) => (p.id === partId ? updater(p) : p)));
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     []
   );
@@ -267,6 +279,9 @@ export const useMechanismStore = () => {
         )
       );
       setSelection({});
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [parts, recordSnapshot]
   );
@@ -287,6 +302,9 @@ export const useMechanismStore = () => {
         )
       );
       setSelection({ partId, pivotId: newPivotId });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -315,6 +333,9 @@ export const useMechanismStore = () => {
       );
       setJoints((prev) => prev.filter((j) => j.p1 !== pivotId && j.p2 !== pivotId));
       setSelection({ partId });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [parts, recordSnapshot]
   );
@@ -343,6 +364,9 @@ export const useMechanismStore = () => {
 
       setJoints((prev) => [...prev, newJoint]);
       setPendingJointPivot(null);
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -351,6 +375,9 @@ export const useMechanismStore = () => {
     (jointId: number) => {
       recordSnapshot();
       setJoints((prev) => prev.filter((j) => j.id !== jointId));
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -380,6 +407,9 @@ export const useMechanismStore = () => {
           })
         )
       );
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -407,6 +437,9 @@ export const useMechanismStore = () => {
           })
         )
       );
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -426,6 +459,9 @@ export const useMechanismStore = () => {
         )
       );
       setJoints((prev) => prev.filter((j) => j.slotId !== slotId));
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -455,6 +491,9 @@ export const useMechanismStore = () => {
 
       setJoints((prev) => [...prev, newJoint]);
       setPendingJointPivot(null);
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -496,6 +535,9 @@ export const useMechanismStore = () => {
 
       setParts((prev) => syncPartsAndPivots([...prev, newGear]));
       setSelection({ partId: newPartId });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );
@@ -558,6 +600,9 @@ export const useMechanismStore = () => {
           return j;
         })
       );
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [parts, joints, recordSnapshot]
   );
@@ -598,6 +643,9 @@ export const useMechanismStore = () => {
 
       setJoints((prev) => [...prev, newJoint]);
       setPendingJointPivot(null);
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
     },
     [recordSnapshot]
   );

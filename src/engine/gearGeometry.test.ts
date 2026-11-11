@@ -358,4 +358,109 @@ describe('gearGeometry', () => {
     const expected4 = expected1 / 32;
     expect(g4.rot).toBeCloseTo(expected4, 2);
   });
+
+  it('permite mover peças durante a pausa e continuar a simulação sem retroceder à posição anterior', () => {
+    const m = 4;
+    const g1: Part = {
+      id: 1,
+      name: 'Pinhão Motor',
+      type: 'gear',
+      x: -180,
+      y: 0,
+      rot: 0,
+      w: 48,
+      h: 48,
+      gear: { teeth: 10, module: m },
+      pivots: [{ id: 10, label: 'A1', lx: 0, ly: 0, fixed: true, motor: true, motorRpm: 60 }],
+    };
+    const g2: Part = {
+      id: 2,
+      name: 'Coroa 80T',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 328,
+      h: 328,
+      gear: { teeth: 80, module: m },
+      pivots: [{ id: 20, label: 'B1', lx: 0, ly: 0, fixed: true }],
+    };
+
+    const parts = [g1, g2];
+    const joints: Joint[] = [
+      { id: 101, type: 'gear', p1: 10, p2: 20, part1Id: 1, part2Id: 2, gearRatio: 10 / 80 },
+    ];
+
+    // Simula 0.1s
+    let sim = createSimulation(parts, joints);
+    stepSimulation(sim, parts, 0.1, 60, 1, {}, {});
+
+    // Usuário pausa e move o conjunto 50px para cima (y = 50)
+    g1.y = 50;
+    g2.y = 50;
+
+    // Novo ciclo de simulação a partir do estado movido
+    sim = createSimulation(parts, joints);
+    stepSimulation(sim, parts, 0.1, 60, 1, {}, {});
+
+    expect(sim.lockedUp).toBe(false);
+    expect(parts[0].y).toBe(50);
+    expect(parts[1].y).toBe(50);
+  });
+
+  it('não trava com erro de Ponto Morto quando pinhão aciona par coaxial soldado montado em terra', () => {
+    const m = 4;
+    // Pinhão A1 (z=10, motor, ground)
+    const pinion: Part = {
+      id: 1,
+      name: 'A1',
+      type: 'gear',
+      x: -180,
+      y: 0,
+      rot: 0,
+      w: 48,
+      h: 48,
+      gear: { teeth: 10, module: m },
+      pivots: [{ id: 10, label: 'A1', lx: 0, ly: 0, fixed: true, motor: true, motorRpm: 60 }],
+    };
+    // Coroa grande (z=80, ground)
+    const bigGear: Part = {
+      id: 2,
+      name: 'Coroa 80T',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 328,
+      h: 328,
+      gear: { teeth: 80, module: m },
+      pivots: [{ id: 20, label: 'Center', lx: 0, ly: 0, fixed: true }],
+    };
+    // Engrenagem menor coaxial B1 (z=20, ground)
+    const smallGear: Part = {
+      id: 3,
+      name: 'B1',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 88,
+      h: 88,
+      gear: { teeth: 20, module: m },
+      pivots: [{ id: 30, label: 'B1', lx: 0, ly: 0, fixed: true }],
+    };
+
+    const parts = [pinion, bigGear, smallGear];
+    const joints: Joint[] = [
+      { id: 101, type: 'gear', p1: 10, p2: 20, part1Id: 1, part2Id: 2, gearRatio: 10 / 80 },
+      { id: 102, type: 'weld', p1: 20, p2: 30, part1Id: 2, part2Id: 3 },
+    ];
+
+    const sim = createSimulation(parts, joints);
+    stepSimulation(sim, parts, 0.1, 60, 1, {}, {});
+
+    expect(sim.lockedUp).toBe(false);
+    expect(sim.errorResidual).toBeLessThan(0.5);
+    expect(bigGear.rot).toBeCloseTo(smallGear.rot, 4);
+  });
 });

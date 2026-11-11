@@ -69,6 +69,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     startWorld: Point2D;
     initialPartPos?: Point2D;
     initialPartRot?: number;
+    initialPartnerStates?: { id: number; x: number; y: number; rot: number }[];
     targetPart?: Part;
     targetPivot?: Pivot;
     endpointIndex?: number;
@@ -1188,12 +1189,41 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           const gizmoHit = hitGizmo(worldPt, selPart, camera);
           if (gizmoHit?.type === 'rotate') {
             recordSnapshot();
+            const weldedCluster = new Set<number>([selPart.id]);
+            let changed = true;
+            while (changed) {
+              changed = false;
+              for (const j of joints) {
+                if (j.type === 'weld' && j.part1Id && j.part2Id) {
+                  if (weldedCluster.has(j.part1Id) && !weldedCluster.has(j.part2Id)) {
+                    weldedCluster.add(j.part2Id);
+                    changed = true;
+                  } else if (weldedCluster.has(j.part2Id) && !weldedCluster.has(j.part1Id)) {
+                    weldedCluster.add(j.part1Id);
+                    changed = true;
+                  }
+                }
+              }
+            }
+            weldedCluster.delete(selPart.id);
+
+            const initialPartnerStates = Array.from(weldedCluster).map((pid) => {
+              const partner = parts.find((p) => p.id === pid);
+              return {
+                id: pid,
+                x: partner ? partner.x : selPart.x,
+                y: partner ? partner.y : selPart.y,
+                rot: partner ? partner.rot : selPart.rot,
+              };
+            });
+
             setDragState({
               mode: 'rotatePart',
               startScreen: screenPt,
               startWorld: worldPt,
               targetPart: selPart,
               initialPartRot: selPart.rot,
+              initialPartnerStates,
               curWorld: worldPt,
             });
             return;
@@ -1284,12 +1314,42 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         recordSnapshot();
         setSelection({ partId: clickedPart.id });
         if (!simRunning) {
+          const weldedCluster = new Set<number>([clickedPart.id]);
+          let changed = true;
+          while (changed) {
+            changed = false;
+            for (const j of joints) {
+              if (j.type === 'weld' && j.part1Id && j.part2Id) {
+                if (weldedCluster.has(j.part1Id) && !weldedCluster.has(j.part2Id)) {
+                  weldedCluster.add(j.part2Id);
+                  changed = true;
+                } else if (weldedCluster.has(j.part2Id) && !weldedCluster.has(j.part1Id)) {
+                  weldedCluster.add(j.part1Id);
+                  changed = true;
+                }
+              }
+            }
+          }
+          weldedCluster.delete(clickedPart.id);
+
+          const initialPartnerStates = Array.from(weldedCluster).map((pid) => {
+            const partner = parts.find((p) => p.id === pid);
+            return {
+              id: pid,
+              x: partner ? partner.x : clickedPart.x,
+              y: partner ? partner.y : clickedPart.y,
+              rot: partner ? partner.rot : clickedPart.rot,
+            };
+          });
+
           setDragState({
             mode: 'dragPart',
             startScreen: screenPt,
             startWorld: worldPt,
             targetPart: clickedPart,
             initialPartPos: { x: clickedPart.x, y: clickedPart.y },
+            initialPartRot: clickedPart.rot,
+            initialPartnerStates,
             curWorld: worldPt,
           });
         }
@@ -1356,17 +1416,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         newRot = Math.round(newRot / step) * step;
       }
 
-      const deltaRot = newRot - part.rot;
+      const rotDiff = newRot - (dragState.initialPartRot ?? 0);
       updatePart(part.id, (p) => ({ ...p, rot: newRot }));
 
-      // Sincronizar rotação de peças soldadas no mesmo eixo
-      const weldedJoints = joints.filter(
-        (j) => j.type === 'weld' && (j.part1Id === part.id || j.part2Id === part.id)
-      );
-      for (const wj of weldedJoints) {
-        const partnerId = wj.part1Id === part.id ? wj.part2Id : wj.part1Id;
-        if (partnerId) {
-          updatePart(partnerId, (p) => ({ ...p, rot: p.rot + deltaRot }));
+      // Sincronizar rotação de peças soldadas no mesmo eixo (sem acumulação)
+      if (dragState.initialPartnerStates) {
+        for (const ps of dragState.initialPartnerStates) {
+          updatePart(ps.id, (p) => ({ ...p, rot: ps.rot + rotDiff }));
         }
       }
 
@@ -1465,66 +1521,100 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       const dy = rawWorld.y - dragState.startWorld.y;
       let newX = dragState.initialPartPos.x + dx;
       let newY = dragState.initialPartPos.y + dy;
+      let newRot = dragState.initialPartRot ?? dragState.targetPart.rot;
 
       if (camera.snapToGrid) {
         newX = Math.round(newX / camera.gridSize) * camera.gridSize;
         newY = Math.round(newY / camera.gridSize) * camera.gridSize;
       }
 
+      const weldedPartnerIds = new Set(dragState.initialPartnerStates?.map((ps) => ps.id) ?? []);
+
       // 1. Auto-snap concêntrico magnético para engrenagens no mesmo eixo (Solidárias)
-      let newRot = dragState.targetPart.rot;
       if (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
         const otherGears = parts.filter(
-          (op) => op.id !== dragState.targetPart!.id && op.type === 'gear' && op.gear && !op.hidden
+          (op) =>
+            op.id !== dragState.targetPart!.id &&
+            !weldedPartnerIds.has(op.id) &&
+            op.type === 'gear' &&
+            op.gear &&
+            !op.hidden
         );
+
         let snappedConcentric = false;
-        for (const og of otherGears) {
-          const distCenters = Math.hypot(newX - og.x, newY - og.y);
-          if (distCenters < 14) {
-            newX = og.x;
-            newY = og.y;
-            snappedConcentric = true;
-            break;
+        if (weldedPartnerIds.size === 0) {
+          for (const og of otherGears) {
+            const distCenters = Math.hypot(newX - og.x, newY - og.y);
+            if (distCenters < 14) {
+              newX = og.x;
+              newY = og.y;
+              snappedConcentric = true;
+              break;
+            }
           }
         }
 
         // 2. Auto-snap magnético para engrenamento externo com alinhamento de fase de dentes
         if (!snappedConcentric) {
-          for (const og of otherGears) {
-            const testPart: Part = { ...dragState.targetPart, x: newX, y: newY };
-            const contact = calculateGearContact(og, testPart);
-            if (contact) {
-              const idealPos = getIdealMeshedPosition(og, testPart);
-              const distToIdeal = Math.hypot(newX - idealPos.x, newY - idealPos.y);
-              if (distToIdeal < 18) {
-                newX = idealPos.x;
-                newY = idealPos.y;
-                newRot = calculateMeshedRotation(og, testPart, idealPos);
-                break;
+          const clusterGears = [
+            {
+              part: dragState.targetPart,
+              initX: dragState.initialPartPos.x,
+              initY: dragState.initialPartPos.y,
+              initRot: dragState.initialPartRot ?? dragState.targetPart.rot,
+            },
+            ...(dragState.initialPartnerStates ?? [])
+              .map((ps) => {
+                const p = parts.find((part) => part.id === ps.id);
+                return p && p.type === 'gear' && p.gear
+                  ? { part: p, initX: ps.x, initY: ps.y, initRot: ps.rot }
+                  : null;
+              })
+              .filter(Boolean) as { part: Part; initX: number; initY: number; initRot: number }[],
+          ];
+
+          let meshedSnapFound = false;
+          for (const cg of clusterGears) {
+            const curCgX = newX + (cg.initX - dragState.initialPartPos.x);
+            const curCgY = newY + (cg.initY - dragState.initialPartPos.y);
+            const testPart: Part = { ...cg.part, x: curCgX, y: curCgY };
+
+            for (const og of otherGears) {
+              const contact = calculateGearContact(og, testPart);
+              if (contact) {
+                const idealPos = getIdealMeshedPosition(og, testPart);
+                const distToIdeal = Math.hypot(curCgX - idealPos.x, curCgY - idealPos.y);
+                if (distToIdeal < 18) {
+                  newX = idealPos.x - (cg.initX - dragState.initialPartPos.x);
+                  newY = idealPos.y - (cg.initY - dragState.initialPartPos.y);
+
+                  const idealCgRot = calculateMeshedRotation(og, testPart, idealPos);
+                  const dRot = idealCgRot - cg.initRot;
+                  newRot = (dragState.initialPartRot ?? dragState.targetPart.rot) + dRot;
+                  meshedSnapFound = true;
+                  break;
+                }
               }
             }
+            if (meshedSnapFound) break;
           }
         }
       }
 
-      const moveDx = newX - dragState.targetPart.x;
-      const moveDy = newY - dragState.targetPart.y;
-      const dRot = newRot - dragState.targetPart.rot;
+      const totalDx = newX - dragState.initialPartPos.x;
+      const totalDy = newY - dragState.initialPartPos.y;
+      const rotDiff = newRot - (dragState.initialPartRot ?? dragState.targetPart.rot);
 
       updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY, rot: newRot }));
 
-      // Transladar engrenagens e peças solidárias em bloco
-      const weldedJoints = joints.filter(
-        (j) => j.type === 'weld' && (j.part1Id === dragState.targetPart!.id || j.part2Id === dragState.targetPart!.id)
-      );
-      for (const wj of weldedJoints) {
-        const partnerId = wj.part1Id === dragState.targetPart!.id ? wj.part2Id : wj.part1Id;
-        if (partnerId) {
-          updatePart(partnerId, (p) => ({
+      // Transladar engrenagens e peças solidárias em bloco de forma determinística
+      if (dragState.initialPartnerStates) {
+        for (const ps of dragState.initialPartnerStates) {
+          updatePart(ps.id, (p) => ({
             ...p,
-            x: p.x + moveDx,
-            y: p.y + moveDy,
-            rot: p.rot + dRot,
+            x: ps.x + totalDx,
+            y: ps.y + totalDy,
+            rot: ps.rot + rotDiff,
           }));
         }
       }

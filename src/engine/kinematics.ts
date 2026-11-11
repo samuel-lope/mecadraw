@@ -171,6 +171,8 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
       const p1 = parts.find((p) => p.id === j.part1Id);
       const p2 = parts.find((p) => p.id === j.part2Id);
       if (p1 && p2) {
+        const key = [p1.id, p2.id].sort().join('-');
+        pairedGears.add(key);
         simWelds.push({
           part1Id: p1.id,
           part2Id: p2.id,
@@ -530,12 +532,10 @@ export const stepSimulation = (
 
       const p1Motor = p1.pivots.some((pv) => pv.motor);
       const p2Motor = p2.pivots.some((pv) => pv.motor);
-      const p1Fixed = p1.pivots.some((pv) => pv.fixed);
-      const p2Fixed = p2.pivots.some((pv) => pv.fixed);
 
-      if ((p1Motor || p1Fixed) && !(p2Motor || p2Fixed)) {
+      if (p1Motor && !p2Motor) {
         p2.rot -= rotErr;
-      } else if (!(p1Motor || p1Fixed) && (p2Motor || p2Fixed)) {
+      } else if (!p1Motor && p2Motor) {
         p1.rot += rotErr;
       } else {
         p2.rot -= rotErr * 0.5;
