@@ -94,6 +94,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     setCamera,
     simRunning,
     stepSim,
+    stepPausedTrails,
+    getSimTime,
     trails,
     telemetryHoverPoint,
     recordSnapshot,
@@ -128,6 +130,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
       if (simRunning) {
         stepSim(dt);
+      } else {
+        stepPausedTrails(dt);
       }
 
       drawCanvas();
@@ -136,7 +140,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [simRunning, stepSim, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot, telemetryHoverPoint]);
+  }, [simRunning, stepSim, stepPausedTrails, parts, joints, camera, selection, trails, dragState, hoveredPivot, hoveredSlot, hoveredPart, pendingJointPivot, telemetryHoverPoint]);
 
   // Função Principal de Renderização
   const drawCanvas = useCallback(() => {
@@ -220,7 +224,11 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
         const pivotOwner = parts.flatMap((p) => p.pivots).find((pv) => pv.id === Number(pId));
         const [r, g, b] = hexToRgb(pivotOwner?.traceColor || '#a855f7');
-        const latestTime = pts[pts.length - 1].time;
+        const simTime = getSimTime();
+        const latestTime =
+          simTime !== null && pts.length > 0 && simTime >= pts[pts.length - 1].time
+            ? simTime
+            : pts[pts.length - 1].time;
         const duration =
           pivotOwner?.traceDuration !== undefined
             ? pivotOwner.traceDuration

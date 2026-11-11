@@ -13,7 +13,13 @@ import {
   ToolType,
   TrailPoint,
 } from '../types/mechanism';
-import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
+import {
+  analyzeMechanism,
+  createSimulation,
+  stepSimulation,
+  stepPausedTrails,
+  SimulationInstance,
+} from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
 import { pivotWorldPos, projectPointToSlot } from '../engine/geometry';
 import {
@@ -134,11 +140,23 @@ export const useMechanismStore = () => {
   // Controles de Simulação
   const startSimulation = useCallback(() => {
     if (simRunning) return;
-    simSnapshotRef.current = {
-      parts: JSON.parse(JSON.stringify(parts)),
-      joints: JSON.parse(JSON.stringify(joints)),
-    };
-    simInstanceRef.current = createSimulation(parts, joints);
+    if (!simSnapshotRef.current) {
+      simSnapshotRef.current = {
+        parts: JSON.parse(JSON.stringify(parts)),
+        joints: JSON.parse(JSON.stringify(joints)),
+      };
+    }
+    const motorKey = parts
+      .flatMap((p) => p.pivots)
+      .filter((v) => v.motor)
+      .map((v) => `${v.id}:${v.motorDir || 1}:${v.motorRpm || 0}`)
+      .sort()
+      .join(',');
+
+    if (!simInstanceRef.current) {
+      simInstanceRef.current = createSimulation(parts, joints);
+      (simInstanceRef.current as any)._motorKey = motorKey;
+    }
     setSimRunning(true);
   }, [parts, joints, simRunning]);
 
@@ -151,12 +169,31 @@ export const useMechanismStore = () => {
     if (simSnapshotRef.current) {
       setParts(JSON.parse(JSON.stringify(simSnapshotRef.current.parts)));
       setJoints(JSON.parse(JSON.stringify(simSnapshotRef.current.joints)));
+      simSnapshotRef.current = null;
     }
     simInstanceRef.current = null;
     setTrails({});
     setTelemetry({});
     setSimLockedUp(false);
   }, []);
+
+  const getSimTime = useCallback(() => {
+    return simInstanceRef.current?.time ?? null;
+  }, []);
+
+  const stepPaused = useCallback(
+    (dt: number) => {
+      if (!simInstanceRef.current) return;
+      stepPausedTrails(
+        simInstanceRef.current,
+        parts,
+        dt,
+        trails,
+        camera.trailDuration
+      );
+    },
+    [parts, trails, camera.trailDuration]
+  );
 
   // Passo de simulação (chamado pelo loop de animação do Canvas)
   const stepSim = useCallback(
@@ -913,6 +950,8 @@ export const useMechanismStore = () => {
     pauseSimulation,
     resetSimulation,
     stepSim,
+    stepPausedTrails: stepPaused,
+    getSimTime,
     addPart,
     updatePart,
     deletePart,

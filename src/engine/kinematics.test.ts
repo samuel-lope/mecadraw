@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeMechanism, createSimulation, stepSimulation } from './kinematics';
+import { analyzeMechanism, createSimulation, stepSimulation, stepPausedTrails } from './kinematics';
 import { createBar, PRESETS } from './presets';
+import { pivotWorldPos } from './geometry';
 import { Part, TrailPoint } from '../types/mechanism';
 
 describe('Kinematics Engine', () => {
@@ -238,5 +239,67 @@ describe('Kinematics Engine', () => {
 
     // Deve ser contida pelo batente em x = 50
     expect(sim.particles[10].x).toBeCloseTo(50, 1);
+  });
+
+  it('fades and prunes temporary trails during simulation pause until they disappear', () => {
+    const { parts, joints } = PRESETS.fourBar();
+    const sim = createSimulation(parts, joints);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry = {};
+
+    const dt = 0.05;
+    const trailDuration = 1.0;
+
+    // Simulate for 2 seconds
+    for (let i = 0; i < 40; i++) {
+      stepSimulation(sim, parts, dt, 60, 1, trails, telemetry, trailDuration);
+    }
+
+    const tracedPivotId = parts.flatMap((p) => p.pivots).find((pv) => pv.trace)?.id!;
+    expect(trails[tracedPivotId].length).toBeGreaterThan(0);
+
+    // Pause simulation and step paused trails for 0.5s (partially faded)
+    for (let i = 0; i < 10; i++) {
+      stepPausedTrails(sim, parts, dt, trails, trailDuration);
+    }
+    expect(trails[tracedPivotId].length).toBeGreaterThan(0);
+
+    // Continue paused trails until full trailDuration has passed (1.5s total pause)
+    for (let i = 0; i < 20; i++) {
+      stepPausedTrails(sim, parts, dt, trails, trailDuration);
+    }
+
+    // Trail should have completely faded and disappeared
+    expect(trails[tracedPivotId].length).toBe(0);
+  });
+
+  it('resumes simulation smoothly after pause without resetting time or teleporting parts', () => {
+    const { parts, joints } = PRESETS.fourBar();
+    const sim = createSimulation(parts, joints);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry = {};
+
+    // Run for 1.0s
+    for (let i = 0; i < 20; i++) {
+      stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry, 1.0);
+    }
+    const timeAtPause = sim.time;
+    const crankPivot = parts[0].pivots[1];
+    const posAtPause = { ...pivotWorldPos(parts[0], crankPivot) };
+
+    // Pause for 0.5s
+    for (let i = 0; i < 10; i++) {
+      stepPausedTrails(sim, parts, 0.05, trails, 1.0);
+    }
+
+    // Parts did not move during pause
+    const posDuringPause = pivotWorldPos(parts[0], crankPivot);
+    expect(posDuringPause.x).toBeCloseTo(posAtPause.x, 3);
+    expect(posDuringPause.y).toBeCloseTo(posAtPause.y, 3);
+
+    // Resume simulation for 1 step
+    stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry, 1.0);
+    expect(sim.time).toBeGreaterThan(timeAtPause);
+    expect(sim.lockedUp).toBe(false);
   });
 });

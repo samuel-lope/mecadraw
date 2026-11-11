@@ -604,6 +604,49 @@ export const stepSimulation = (
   }
 };
 
+export const stepPausedTrails = (
+  sim: SimulationInstance,
+  parts: Part[],
+  dt: number,
+  trails: Record<number, TrailPoint[]>,
+  defaultTrailDuration = 3.0
+): void => {
+  let hasTemporaryTrails = false;
+  for (const part of parts) {
+    for (const pv of part.pivots) {
+      if (!pv.trace) continue;
+      const trail = trails[pv.id];
+      if (!trail || trail.length === 0) continue;
+      const duration = pv.traceDuration !== undefined ? pv.traceDuration : defaultTrailDuration;
+      if (duration > 0) {
+        hasTemporaryTrails = true;
+        break;
+      }
+    }
+    if (hasTemporaryTrails) break;
+  }
+
+  if (!hasTemporaryTrails) return;
+
+  sim.time += dt;
+
+  for (const part of parts) {
+    for (const pv of part.pivots) {
+      if (!pv.trace) continue;
+      const trail = trails[pv.id];
+      if (!trail || trail.length === 0) continue;
+
+      const duration = pv.traceDuration !== undefined ? pv.traceDuration : defaultTrailDuration;
+      if (duration > 0) {
+        const cutoffTime = sim.time - duration;
+        while (trail.length > 0 && trail[0].time < cutoffTime) {
+          trail.shift();
+        }
+      }
+    }
+  }
+};
+
 export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnalysis => {
   const groundPivots = parts.flatMap(p => p.pivots).filter(pv => pv.fixed || pv.motor);
   const hasGround = groundPivots.length > 0;
