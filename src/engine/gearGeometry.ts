@@ -292,3 +292,27 @@ export const getIdealMeshedPosition = (
     y: gear1.y + uy * idealDist,
   };
 };
+
+/**
+ * Calcula a rotação ajustada da engrenagem 2 (na fase de dente mais próxima da atual)
+ * para que os dentes de gear1 encaixem perfeitamente nos vãos de gear2 sem colisão visual.
+ */
+export const calculateMeshedRotation = (
+  gear1: Part,
+  gear2: Part,
+  pos2?: Point2D
+): number => {
+  if (!gear1.gear || !gear2.gear) return gear2.rot;
+  const z1 = Math.max(6, Math.round(gear1.gear.teeth));
+  const z2 = Math.max(6, Math.round(gear2.gear.teeth));
+
+  const x2 = pos2 ? pos2.x : gear2.x;
+  const y2 = pos2 ? pos2.y : gear2.y;
+  const phi = Math.atan2(y2 - gear1.y, x2 - gear1.x);
+
+  const pitchAngle2 = (2 * Math.PI) / z2;
+  const baseRot2 = phi + Math.PI - (z1 / z2) * (gear1.rot - phi) + Math.PI / z2;
+  const k = Math.round((gear2.rot - baseRot2) / pitchAngle2);
+
+  return baseRot2 + k * pitchAngle2;
+};

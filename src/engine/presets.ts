@@ -272,7 +272,7 @@ export const PRESETS: Record<string, () => PresetData> = {
           id: ramPivotId,
           lx: 0,
           ly: 0,
-          slider: { enabled: true, angle: 0, length: 240 },
+          slider: { enabled: true, angle: 0, length: 360 },
         },
       ],
     };

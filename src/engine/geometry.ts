@@ -28,6 +28,24 @@ export const slotWorldEndpoints = (part: Part, slot: PartSlot): [Point2D, Point2
   ];
 };
 
+export const projectPointToSlot = (worldPt: Point2D, part: Part, slot: PartSlot): Point2D => {
+  const center = slotWorldCenter(part, slot);
+  const totalAngle = part.rot + (slot.angle || 0);
+  const dirX = Math.cos(totalAngle);
+  const dirY = Math.sin(totalAngle);
+  const dx = worldPt.x - center.x;
+  const dy = worldPt.y - center.y;
+  let proj = dx * dirX + dy * dirY;
+  if (slot.closedEnds !== false) {
+    const halfLen = (slot.length || 80) / 2;
+    proj = Math.max(-halfLen, Math.min(halfLen, proj));
+  }
+  return {
+    x: center.x + dirX * proj,
+    y: center.y + dirY * proj,
+  };
+};
+
 export const hitSlot = (
   worldPt: Point2D,
   parts: Part[],
@@ -170,7 +188,7 @@ export const hitPart = (worldPt: Point2D, parts: Part[]): Part | null => {
     const [lx, ly] = rotate2D(worldPt.x - p.x, worldPt.y - p.y, -p.rot);
 
     let isInside = false;
-    if (p.type === 'circle') {
+    if (p.type === 'circle' || p.type === 'gear') {
       isInside = Math.hypot(lx, ly) <= p.w / 2;
     } else if (p.type === 'tri') {
       const t = (ly + p.h / 2) / p.h;

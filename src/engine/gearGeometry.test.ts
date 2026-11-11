@@ -4,6 +4,7 @@ import {
   generateGearOutline,
   calculateGearContact,
   getIdealMeshedPosition,
+  calculateMeshedRotation,
   DEFAULT_PRESSURE_ANGLE,
 } from './gearGeometry';
 import { Part } from '../types/mechanism';
@@ -164,5 +165,39 @@ describe('gearGeometry', () => {
     // G2 rotated in opposite direction by ratio * expectedDTheta1
     const expectedDTheta2 = -expectedDTheta1 * 0.5;
     expect(g2.rot).toBeCloseTo(expectedDTheta2, 2);
+  });
+
+  it('calculates meshed rotation phase aligning tooth to gap', () => {
+    const gear1: Part = {
+      id: 1,
+      name: 'G1',
+      type: 'gear',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      gear: { teeth: 20, module: 4 },
+      pivots: [{ id: 10, label: 'P1', lx: 0, ly: 0 }],
+    };
+
+    const gear2: Part = {
+      id: 2,
+      name: 'G2',
+      type: 'gear',
+      x: 80,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      gear: { teeth: 20, module: 4 },
+      pivots: [{ id: 20, label: 'P2', lx: 0, ly: 0 }],
+    };
+
+    const rot2 = calculateMeshedRotation(gear1, gear2);
+    // Should be offset by half tooth pitch angle
+    const pitchAngle = (2 * Math.PI) / 20;
+    const diff = Math.abs(rot2 % pitchAngle);
+    expect(diff).toBeCloseTo(pitchAngle / 2, 4);
   });
 });

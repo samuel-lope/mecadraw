@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeMechanism, createSimulation, stepSimulation } from './kinematics';
 import { createBar, PRESETS } from './presets';
-import { TrailPoint } from '../types/mechanism';
+import { Part, TrailPoint } from '../types/mechanism';
 
 describe('Kinematics Engine', () => {
   it('correctly calculates DOF and Grashof for a four-bar linkage', () => {
@@ -206,5 +206,37 @@ describe('Kinematics Engine', () => {
     const oldest = pts[0];
     const newest = pts[pts.length - 1];
     expect(newest.time - oldest.time).toBeLessThanOrEqual(trailDuration + dt * 2);
+  });
+
+  it('enforces travel limits (end stops) on linear slider guides', () => {
+    const sliderPart: Part = {
+      id: 1,
+      name: 'Slider Block',
+      type: 'rect',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 40,
+      h: 20,
+      pivots: [
+        {
+          id: 10,
+          label: 'S1',
+          lx: 0,
+          ly: 0,
+          slider: { enabled: true, angle: 0, length: 100 }, // [-50, +50]
+        },
+      ],
+    };
+
+    const parts = [sliderPart];
+    const sim = createSimulation(parts, []);
+
+    // Deslocar partícula além do limite máximo (ex: x = 120)
+    sim.particles[10].x = 120;
+    stepSimulation(sim, parts, 0.016, 60, 1, {}, {});
+
+    // Deve ser contida pelo batente em x = 50
+    expect(sim.particles[10].x).toBeCloseTo(50, 1);
   });
 });

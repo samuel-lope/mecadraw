@@ -19,6 +19,7 @@ import { createBar } from '../engine/presets';
 import {
   calculateGearContact,
   calculateGearRadii,
+  calculateMeshedRotation,
   generateGearOutline,
   getIdealMeshedPosition,
 } from '../engine/gearGeometry';
@@ -1027,8 +1028,12 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     if (tool === 'slot') {
       if (clickedPart) {
         recordSnapshot();
-        const [lx, ly] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
-        addSlotToPart(clickedPart.id, 80, 0, true, lx, ly);
+        const [rawLx, rawLy] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
+        const ly = clickedPart.type === 'bar' ? 0 : rawLy;
+        const maxSlotLen = Math.min(80, Math.max(20, Math.round(clickedPart.w - 24)));
+        const halfLen = maxSlotLen / 2;
+        const lx = Math.max(-clickedPart.w / 2 + halfLen + 4, Math.min(clickedPart.w / 2 - halfLen - 4, rawLx));
+        addSlotToPart(clickedPart.id, maxSlotLen, 0, true, lx, ly);
         setSelection({ partId: clickedPart.id });
         setTool('sel');
       }
@@ -1039,7 +1044,10 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     if (tool === 'axis') {
       if (clickedPart) {
         recordSnapshot();
-        const [lx, ly] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
+        let [lx, ly] = rotate2D(worldPt.x - clickedPart.x, worldPt.y - clickedPart.y, -clickedPart.rot);
+        if (clickedPart.type === 'bar' && Math.abs(ly) < 12) {
+          ly = 0; // snap automático ao centro da barra
+        }
         const newPivotId = Date.now();
         const initial = clickedPart.name.charAt(0).toUpperCase();
         const newLabel = `${initial}${clickedPart.pivots.length + 1}`;
@@ -1154,29 +1162,34 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             if (!matchPv) continue;
 
             if (p.type === 'bar' && p.pivots.length >= 2) {
-              const isSecond = p.pivots[1].id === matchPv.id;
-              const anchorPv = isSecond ? p.pivots[0] : p.pivots[1];
-              const anchorWorld = pivotWorldPos(p, anchorPv);
+              const pvIdx = p.pivots.findIndex((v) => v.id === matchPv.id);
+              if (pvIdx === 0 || pvIdx === 1) {
+                const isSecond = pvIdx === 1;
+                const anchorPv = isSecond ? p.pivots[0] : p.pivots[1];
+                const anchorWorld = pivotWorldPos(p, anchorPv);
 
-              // Preserva proporção de pivôs intermediários/acopladores
-              const extraPivots: ConnectedBarInfo['extraPivots'] = [];
-              const origLen = Math.hypot(p.pivots[1].lx - p.pivots[0].lx, p.pivots[1].ly - p.pivots[0].ly) || 1;
-              for (let i = 2; i < p.pivots.length; i++) {
-                const ep = p.pivots[i];
-                extraPivots.push({
-                  id: ep.id,
-                  relRatio: (ep.lx - p.pivots[0].lx) / origLen,
-                  perpDist: ep.ly,
+                // Preserva proporção de pivôs intermediários/acopladores
+                const extraPivots: ConnectedBarInfo['extraPivots'] = [];
+                const origLen = Math.hypot(p.pivots[1].lx - p.pivots[0].lx, p.pivots[1].ly - p.pivots[0].ly) || 1;
+                for (let i = 2; i < p.pivots.length; i++) {
+                  const ep = p.pivots[i];
+                  extraPivots.push({
+                    id: ep.id,
+                    relRatio: (ep.lx - p.pivots[0].lx) / origLen,
+                    perpDist: ep.ly,
+                  });
+                }
+
+                connectedBars.push({
+                  partId: p.id,
+                  movingPivotId: matchPv.id,
+                  isSecondPivot: isSecond,
+                  anchorWorld,
+                  extraPivots,
                 });
+              } else {
+                connectedOtherParts.push({ partId: p.id, pivotId: matchPv.id });
               }
-
-              connectedBars.push({
-                partId: p.id,
-                movingPivotId: matchPv.id,
-                isSecondPivot: isSecond,
-                anchorWorld,
-                extraPivots,
-              });
             } else {
               connectedOtherParts.push({ partId: p.id, pivotId: matchPv.id });
             }
@@ -1319,12 +1332,35 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         });
       });
 
-      // 2. Para outras peças que não são barras (ex: slider / pistão retangular)
+      // 2. Para outras peças que não são barras ou pivôs adicionais
       if (dragState.connectedOtherParts) {
         dragState.connectedOtherParts.forEach((op) => {
           updatePart(op.partId, (p) => {
             const pv = p.pivots.find((v) => v.id === op.pivotId);
             if (!pv) return p;
+
+            // Se for barra e for um pivô intermediário (A3+), ajusta sua posição local (lx, ly)
+            if (p.type === 'bar' && p.pivots.indexOf(pv) >= 2) {
+              const [relX, rawRelY] = rotate2D(targetPos.x - p.x, targetPos.y - p.y, -p.rot);
+              const relY = Math.abs(rawRelY) < 8 ? 0 : rawRelY;
+              return {
+                ...p,
+                pivots: p.pivots.map((v) => (v.id === op.pivotId ? { ...v, lx: relX, ly: relY } : v)),
+              };
+            }
+
+            // Se a peça tiver um pivô fixo ao terra (e não for o que está sendo arrastado):
+            const fixedPv = p.pivots.find((v) => (v.fixed || v.motor) && v.id !== op.pivotId);
+            if (fixedPv) {
+              const origAngle = Math.atan2(pv.ly - fixedPv.ly, pv.lx - fixedPv.lx);
+              const fixedWorld = pivotWorldPos(p, fixedPv);
+              const newAngle = Math.atan2(targetPos.y - fixedWorld.y, targetPos.x - fixedWorld.x);
+              return {
+                ...p,
+                rot: newAngle - origAngle,
+              };
+            }
+
             const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
             return {
               ...p,
@@ -1351,7 +1387,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         newY = Math.round(newY / camera.gridSize) * camera.gridSize;
       }
 
-      // Auto-snap magnético para engrenagens
+      // Auto-snap magnético para engrenagens com alinhamento de fase de dentes
+      let newRot = dragState.targetPart.rot;
       if (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
         const otherGears = parts.filter(
           (op) => op.id !== dragState.targetPart!.id && op.type === 'gear' && op.gear && !op.hidden
@@ -1365,13 +1402,14 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             if (distToIdeal < 18) {
               newX = idealPos.x;
               newY = idealPos.y;
+              newRot = calculateMeshedRotation(og, testPart, idealPos);
               break;
             }
           }
         }
       }
 
-      updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY }));
+      updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY, rot: newRot }));
       return;
     }
   };

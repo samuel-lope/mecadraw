@@ -23,6 +23,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     deleteSlot,
     connectPinToSlot,
     updateGear,
+    connectGears,
     camera,
     setCamera,
     togglePivotGround,
@@ -40,9 +41,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
   const selPart = parts.find((p) => p.id === selection.partId);
   const selPivot = selPart?.pivots.find((v) => v.id === selection.pivotId);
 
-  // Outros alvos (eixos e fendas) disponíveis para conexão
+  // Outros alvos (eixos, fendas e engrenagens) disponíveis para conexão
   const otherTargets: {
-    type: 'pivot' | 'slot';
+    type: 'pivot' | 'slot' | 'gear';
     id: string;
     label: string;
     part: typeof parts[0];
@@ -50,32 +51,42 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     slot?: NonNullable<typeof parts[0]['slots']>[0];
   }[] = [];
 
-  if (selPart && selPivot) {
+  if (selPart) {
     parts.forEach((p) => {
       if (p.id !== selPart.id) {
-        p.pivots.forEach((pv) => {
-          otherTargets.push({
-            type: 'pivot',
-            id: `pivot:${pv.id}`,
-            label: `Eixo ${pv.label} (Peça ${p.letter || 'A'})`,
-            part: p,
-            pivot: pv,
+        if (selPivot) {
+          p.pivots.forEach((pv) => {
+            otherTargets.push({
+              type: 'pivot',
+              id: `pivot:${pv.id}`,
+              label: `Eixo ${pv.label} (Peça ${p.letter || 'A'})`,
+              part: p,
+              pivot: pv,
+            });
           });
-        });
-        (p.slots || []).forEach((sl) => {
-          otherTargets.push({
-            type: 'slot',
-            id: `slot:${p.id}:${sl.id}`,
-            label: `Fenda ${sl.label} (Peça ${p.letter || 'A'})`,
-            part: p,
-            slot: sl,
+          (p.slots || []).forEach((sl) => {
+            otherTargets.push({
+              type: 'slot',
+              id: `slot:${p.id}:${sl.id}`,
+              label: `Fenda ${sl.label} (Peça ${p.letter || 'A'})`,
+              part: p,
+              slot: sl,
+            });
           });
-        });
+        }
+        if (selPart.type === 'gear' && p.type === 'gear' && p.gear) {
+          otherTargets.push({
+            type: 'gear',
+            id: `gear:${p.id}`,
+            label: `Engrenar com Peça ${p.letter || 'A'} (${p.gear.teeth}D)`,
+            part: p,
+          });
+        }
       }
     });
   }
 
-  // Juntas conectadas ao pivô selecionado com informações do parceiro
+  // Juntas conectadas ao pivô ou à engrenagem selecionada
   const connectedJoints = selPivot
     ? joints
         .filter((j) => j.p1 === selPivot.id || j.p2 === selPivot.id)
@@ -89,6 +100,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               }
             }
             return { joint: j, partnerInfo, isSlot: true };
+          }
+          if (j.type === 'gear') {
+            const partnerPartId = (selPart && j.part1Id === selPart.id) ? j.part2Id : j.part1Id;
+            const partnerPart = parts.find((p) => p.id === partnerPartId);
+            return {
+              joint: j,
+              partnerInfo: `Engrenagem ${partnerPart?.letter || 'A'} (i = ${(j.gearRatio || 1).toFixed(2)})`,
+              isSlot: false,
+            };
           }
           const partnerId = j.p1 === selPivot.id ? j.p2 : j.p1;
           let partnerInfo = 'Eixo Desconhecido';
@@ -329,14 +349,20 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                     if (p.type === 'bar' && p.pivots.length >= 2) {
                       const newL = val;
                       const newW = newL + p.h;
+                      const origL = Math.hypot(p.pivots[1].lx - p.pivots[0].lx, p.pivots[1].ly - p.pivots[0].ly) || 1;
+                      const scale = newL / origL;
                       return {
                         ...p,
                         w: newW,
                         pivots: p.pivots.map((pv, idx) => {
                           if (idx === 0) return { ...pv, lx: -newL / 2, ly: 0 };
                           if (idx === 1) return { ...pv, lx: newL / 2, ly: 0 };
-                          return pv;
+                          return { ...pv, lx: pv.lx * scale };
                         }),
+                        slots: (p.slots || []).map((sl) => ({
+                          ...sl,
+                          length: Math.min(sl.length, Math.max(20, newW - 24)),
+                        })),
                       };
                     }
                     const factor = val / p.w;
@@ -344,7 +370,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                       ...p,
                       w: val,
                       h: p.type === 'circle' ? val : p.h,
-                      pivots: p.pivots.map((pv) => ({ ...pv, lx: pv.lx * factor })),
+                      pivots: p.pivots.map((pv) => ({
+                        ...pv,
+                        lx: pv.lx * factor,
+                        ly: p.type === 'circle' ? pv.ly * factor : pv.ly,
+                      })),
                     };
                   });
                 }}
@@ -371,7 +401,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                         );
                         return { ...p, h: val, w: L + val };
                       }
-                      return { ...p, h: val };
+                      const factorY = val / (p.h || 1);
+                      return {
+                        ...p,
+                        h: val,
+                        pivots: p.pivots.map((pv) => ({ ...pv, ly: pv.ly * factorY })),
+                      };
                     });
                   }}
                   className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
@@ -381,21 +416,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-2 mt-1">
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] text-slate-500">Ângulo (°)</span>
-            <input
-              type="number"
-              step="1"
-              value={Math.round(((selPart.rot * 180) / Math.PI) % 360)}
-              onChange={(e) => {
-                const deg = parseFloat(e.target.value) || 0;
-                updatePart(selPart.id, (p) => ({ ...p, rot: (deg * Math.PI) / 180 }));
-              }}
-              className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
-            />
-          </label>
-
+        <div className="grid grid-cols-3 gap-2 mt-1">
           <label className="flex flex-col gap-1">
             <span className="text-[10px] text-slate-500">Posição X (mm)</span>
             <input
@@ -405,6 +426,34 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               onChange={(e) => {
                 const val = parseFloat(e.target.value) || 0;
                 updatePart(selPart.id, (p) => ({ ...p, x: val }));
+              }}
+              className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] text-slate-500">Posição Y (mm)</span>
+            <input
+              type="number"
+              step="1"
+              value={Math.round(selPart.y * 10) / 10}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value) || 0;
+                updatePart(selPart.id, (p) => ({ ...p, y: val }));
+              }}
+              className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] text-slate-500">Ângulo (°)</span>
+            <input
+              type="number"
+              step="1"
+              value={Math.round(((selPart.rot * 180) / Math.PI) % 360)}
+              onChange={(e) => {
+                const deg = parseFloat(e.target.value) || 0;
+                updatePart(selPart.id, (p) => ({ ...p, rot: (deg * Math.PI) / 180 }));
               }}
               className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
             />
@@ -584,9 +633,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             </div>
             <button
               onClick={() => deletePivot(selPart.id, selPivot.id)}
-              disabled={selPart.pivots.length <= 1}
+              disabled={selPart.pivots.length <= 1 || (selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2)}
               className="p-1 text-slate-400 hover:text-rose-500 disabled:opacity-30"
-              title="Excluir este Eixo"
+              title={selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2 ? "Extremidades da barra não podem ser excluídas" : "Excluir este Eixo"}
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -610,11 +659,20 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               />
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-slate-500">Local Y (mm)</span>
+              <span className="text-[10px] text-slate-500">
+                {selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2
+                  ? 'Local Y (Centro)'
+                  : 'Local Y (mm)'}
+              </span>
               <input
                 type="number"
                 step="1"
-                value={Math.round(selPivot.ly * 10) / 10}
+                disabled={selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2}
+                value={
+                  selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2
+                    ? 0
+                    : Math.round(selPivot.ly * 10) / 10
+                }
                 onChange={(e) => {
                   const val = parseFloat(e.target.value) || 0;
                   updatePart(selPart.id, (p) => ({
@@ -622,7 +680,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                     pivots: p.pivots.map((v) => (v.id === selPivot.id ? { ...v, ly: val } : v)),
                   }));
                 }}
-                className="p-1 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+                className={`p-1 rounded font-mono ${
+                  selPart.type === 'bar' && selPart.pivots.indexOf(selPivot) < 2
+                    ? 'bg-slate-100 dark:bg-slate-800/50 text-slate-400 cursor-not-allowed'
+                    : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none'
+                }`}
               />
             </label>
           </div>
@@ -650,23 +712,40 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             </label>
 
             {selPivot.motor && (
-              <div className="pl-5 flex items-center justify-between text-xs py-1 px-1.5 bg-amber-50/50 dark:bg-amber-950/20 rounded border border-amber-200/50 dark:border-amber-900/50">
-                <span className="text-[10px] text-amber-800 dark:text-amber-300 font-medium">Velocidade RPM:</span>
-                <input
-                  type="number"
-                  min="5"
-                  max="400"
-                  step="5"
-                  value={selPivot.motorRpm || simSpeed}
-                  onChange={(e) => {
-                    const val = Math.max(5, Number(e.target.value) || 60);
-                    updatePart(selPart.id, (p) => ({
-                      ...p,
-                      pivots: p.pivots.map((v) => (v.id === selPivot.id ? { ...v, motorRpm: val } : v)),
-                    }));
-                  }}
-                  className="w-16 p-1 text-center font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"
-                />
+              <div className="pl-5 flex flex-col gap-1.5 py-1 px-1.5 bg-amber-50/50 dark:bg-amber-950/20 rounded border border-amber-200/50 dark:border-amber-900/50">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[10px] text-amber-800 dark:text-amber-300 font-medium">Velocidade RPM:</span>
+                  <input
+                    type="number"
+                    min="5"
+                    max="400"
+                    step="5"
+                    value={selPivot.motorRpm || simSpeed}
+                    onChange={(e) => {
+                      const val = Math.max(5, Number(e.target.value) || 60);
+                      updatePart(selPart.id, (p) => ({
+                        ...p,
+                        pivots: p.pivots.map((v) => (v.id === selPivot.id ? { ...v, motorRpm: val } : v)),
+                      }));
+                    }}
+                    className="w-16 p-1 text-center font-mono rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs"
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[10px] text-amber-800 dark:text-amber-300 font-medium">Sentido:</span>
+                  <button
+                    onClick={() => {
+                      const newDir = (selPivot.motorDir ?? 1) === 1 ? -1 : 1;
+                      updatePart(selPart.id, (p) => ({
+                        ...p,
+                        pivots: p.pivots.map((v) => (v.id === selPivot.id ? { ...v, motorDir: newDir } : v)),
+                      }));
+                    }}
+                    className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-100 hover:bg-amber-200 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700"
+                  >
+                    {(selPivot.motorDir ?? 1) === 1 ? '↻ Horário' : '↺ Anti-horário'}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -681,25 +760,49 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             </label>
 
             {selPivot.slider?.enabled && (
-              <div className="pl-5 flex items-center gap-2">
-                <span className="text-[10px] text-slate-500">Ângulo da Guia (°):</span>
-                <input
-                  type="number"
-                  step="5"
-                  value={Math.round(((selPivot.slider.angle * 180) / Math.PI) % 360)}
-                  onChange={(e) => {
-                    const deg = parseFloat(e.target.value) || 0;
-                    updatePart(selPart.id, (p) => ({
-                      ...p,
-                      pivots: p.pivots.map((v) =>
-                        v.id === selPivot.id && v.slider
-                          ? { ...v, slider: { ...v.slider, angle: (deg * Math.PI) / 180 } }
-                          : v
-                      ),
-                    }));
-                  }}
-                  className="w-16 p-1 text-center rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                />
+              <div className="pl-5 flex flex-col gap-1.5 py-1 px-1.5 bg-cyan-50/50 dark:bg-cyan-950/20 rounded border border-cyan-200/50 dark:border-cyan-900/50">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[10px] text-slate-500">Ângulo da Guia (°):</span>
+                  <input
+                    type="number"
+                    step="5"
+                    value={Math.round(((selPivot.slider.angle * 180) / Math.PI) % 360)}
+                    onChange={(e) => {
+                      const deg = parseFloat(e.target.value) || 0;
+                      updatePart(selPart.id, (p) => ({
+                        ...p,
+                        pivots: p.pivots.map((v) =>
+                          v.id === selPivot.id && v.slider
+                            ? { ...v, slider: { ...v.slider, angle: (deg * Math.PI) / 180 } }
+                            : v
+                        ),
+                      }));
+                    }}
+                    className="w-16 p-1 text-center rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs"
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[10px] text-slate-500">Comprimento (mm):</span>
+                  <input
+                    type="number"
+                    min="40"
+                    max="600"
+                    step="10"
+                    value={selPivot.slider.length || 180}
+                    onChange={(e) => {
+                      const len = Math.max(40, parseFloat(e.target.value) || 180);
+                      updatePart(selPart.id, (p) => ({
+                        ...p,
+                        pivots: p.pivots.map((v) =>
+                          v.id === selPivot.id && v.slider
+                            ? { ...v, slider: { ...v.slider, length: len } }
+                            : v
+                        ),
+                      }));
+                    }}
+                    className="w-16 p-1 text-center rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-xs"
+                  />
+                </div>
               </div>
             )}
 
@@ -798,10 +901,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                       if (!selectedTargetPivotId) return;
                       const target = otherTargets.find((t) => t.id === selectedTargetPivotId);
                       if (!target) return;
-                      if (target.type === 'pivot' && target.pivot) {
+                      if (target.type === 'pivot' && target.pivot && selPivot) {
                         connectJoint({ part: selPart, pivot: selPivot }, { part: target.part, pivot: target.pivot });
-                      } else if (target.type === 'slot' && target.slot) {
+                      } else if (target.type === 'slot' && target.slot && selPivot) {
                         connectPinToSlot({ part: selPart, pivot: selPivot }, { part: target.part, slot: target.slot });
+                      } else if (target.type === 'gear') {
+                        connectGears(selPart, target.part);
                       }
                       setSelectedTargetPivotId('');
                     }}

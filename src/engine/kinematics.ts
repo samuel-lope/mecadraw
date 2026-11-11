@@ -17,6 +17,7 @@ export interface SimParticle {
     origin: Point2D;
     dir: Point2D;
     normal: Point2D;
+    halfLength?: number;
   };
 }
 
@@ -82,6 +83,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
           origin: { ...wpos },
           dir: { x: Math.cos(ang), y: Math.sin(ang) },
           normal: { x: -Math.sin(ang), y: Math.cos(ang) },
+          halfLength: (pivot.slider.length || 180) / 2,
         };
       }
 
@@ -300,6 +302,22 @@ export const stepSimulation = (
 
         part.x -= perpDist * part.slider.normal.x;
         part.y -= perpDist * part.slider.normal.y;
+
+        // Limite de curso (batentes de extremidade)
+        if (part.slider.halfLength !== undefined) {
+          const proj = dx * part.slider.dir.x + dy * part.slider.dir.y;
+          if (proj > part.slider.halfLength) {
+            const excess = proj - part.slider.halfLength;
+            part.x -= excess * part.slider.dir.x;
+            part.y -= excess * part.slider.dir.y;
+            maxResidual = Math.max(maxResidual, excess);
+          } else if (proj < -part.slider.halfLength) {
+            const excess = proj - (-part.slider.halfLength);
+            part.x -= excess * part.slider.dir.x;
+            part.y -= excess * part.slider.dir.y;
+            maxResidual = Math.max(maxResidual, Math.abs(excess));
+          }
+        }
       }
     }
 
@@ -421,6 +439,14 @@ export const stepSimulation = (
       const p2 = parts.find((p) => p.id === g.part2Id);
       if (!p1 || !p2) continue;
 
+      // Sincroniza orientação angular se a engrenagem tiver múltiplos pivôs
+      if (p1.pivots.length >= 2) {
+        p1.rot = computePartPose(p1, sim.particles).rot;
+      }
+      if (p2.pivots.length >= 2) {
+        p2.rot = computePartPose(p2, sim.particles).rot;
+      }
+
       const desiredRot2 = -g.ratio * p1.rot + g.initialDiff;
       let rotErr = p2.rot - desiredRot2;
       rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
@@ -463,7 +489,15 @@ export const stepSimulation = (
   for (const part of parts) {
     if (part.pivots.length === 0) continue;
 
-    if (part.pivots.length === 1) {
+    if (part.type === 'gear') {
+      const p = part.pivots[0];
+      const simP = sim.particles[p.id];
+      if (simP) {
+        const [rx, ry] = rotate2D(p.lx, p.ly, part.rot);
+        part.x = simP.x - rx;
+        part.y = simP.y - ry;
+      }
+    } else if (part.pivots.length === 1) {
       const p = part.pivots[0];
       const simP = sim.particles[p.id];
       if (simP) {

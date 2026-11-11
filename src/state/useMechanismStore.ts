@@ -15,8 +15,13 @@ import {
 } from '../types/mechanism';
 import { analyzeMechanism, createSimulation, stepSimulation, SimulationInstance } from '../engine/kinematics';
 import { PRESETS } from '../engine/presets';
-import { pivotWorldPos, slotWorldCenter } from '../engine/geometry';
-import { calculateGearRadii, getIdealMeshedPosition } from '../engine/gearGeometry';
+import { pivotWorldPos, projectPointToSlot } from '../engine/geometry';
+import {
+  calculateGearRadii,
+  calculateMeshedRotation,
+  generateGearOutline,
+  getIdealMeshedPosition,
+} from '../engine/gearGeometry';
 import { syncPartsAndPivots } from '../engine/naming';
 
 export interface MechanismStateSnapshot {
@@ -158,6 +163,12 @@ export const useMechanismStore = () => {
     (dt: number) => {
       if (!simInstanceRef.current) {
         simInstanceRef.current = createSimulation(parts, joints);
+      } else {
+        const allPivotIds = parts.flatMap((p) => p.pivots.map((v) => v.id));
+        const missing = allPivotIds.some((id) => !simInstanceRef.current!.particles[id]);
+        if (missing) {
+          simInstanceRef.current = createSimulation(parts, joints);
+        }
       }
       stepSimulation(
         simInstanceRef.current,
@@ -200,7 +211,13 @@ export const useMechanismStore = () => {
 
       setParts((prev) => syncPartsAndPivots(prev.filter((p) => p.id !== partId)));
       setJoints((prev) =>
-        prev.filter((j) => !pivotIds.includes(j.p1) && (j.p2 === undefined || !pivotIds.includes(j.p2)))
+        prev.filter(
+          (j) =>
+            !pivotIds.includes(j.p1) &&
+            (j.p2 === undefined || !pivotIds.includes(j.p2)) &&
+            j.part1Id !== partId &&
+            j.part2Id !== partId
+        )
       );
       setSelection({});
     },
@@ -230,11 +247,18 @@ export const useMechanismStore = () => {
   const deletePivot = useCallback(
     (partId: number, pivotId: number) => {
       recordSnapshot();
+      const target = parts.find((p) => p.id === partId);
+      if (!target) return;
+      if (target.type === 'bar') {
+        const pvIdx = target.pivots.findIndex((v) => v.id === pivotId);
+        if (pvIdx === 0 || pvIdx === 1) return; // protege extremos da barra
+      }
+      if (target.pivots.length <= 1) return;
+
       setParts((prev) =>
         syncPartsAndPivots(
           prev.map((p) => {
             if (p.id !== partId) return p;
-            if (p.pivots.length <= 1) return p;
             return {
               ...p,
               pivots: p.pivots.filter((v) => v.id !== pivotId),
@@ -245,7 +269,7 @@ export const useMechanismStore = () => {
       setJoints((prev) => prev.filter((j) => j.p1 !== pivotId && j.p2 !== pivotId));
       setSelection({ partId });
     },
-    [recordSnapshot]
+    [parts, recordSnapshot]
   );
 
   const connectJoint = useCallback(
@@ -364,10 +388,10 @@ export const useMechanismStore = () => {
       if (pivotRef.part.id === slotRef.part.id) return;
       recordSnapshot();
 
-      const sCenter = slotWorldCenter(slotRef.part, slotRef.slot);
       const pinPos = pivotWorldPos(pivotRef.part, pivotRef.pivot);
-      const dx = sCenter.x - pinPos.x;
-      const dy = sCenter.y - pinPos.y;
+      const proj = projectPointToSlot(pinPos, slotRef.part, slotRef.slot);
+      const dx = proj.x - pinPos.x;
+      const dy = proj.y - pinPos.y;
 
       if (!pivotRef.pivot.fixed && !pivotRef.pivot.motor) {
         setParts((prev) =>
@@ -432,23 +456,63 @@ export const useMechanismStore = () => {
   const updateGear = useCallback(
     (partId: number, updater: Partial<GearData> | ((g: GearData) => GearData)) => {
       recordSnapshot();
-      setParts((prev) =>
-        prev.map((p) => {
-          if (p.id !== partId || !p.gear) return p;
-          const updatedGear = typeof updater === 'function' ? updater(p.gear) : { ...p.gear, ...updater };
-          const r = calculateGearRadii(updatedGear.teeth, updatedGear.module);
-          const diam = r.addendum * 2;
-          return {
-            ...p,
-            gear: updatedGear,
-            w: diam,
-            h: diam,
-            name: `Engrenagem ${updatedGear.teeth}D`,
-          };
+      setParts((prev) => {
+        const target = prev.find((p) => p.id === partId);
+        if (!target || !target.gear) return prev;
+
+        const updatedGear = typeof updater === 'function' ? updater(target.gear) : { ...target.gear, ...updater };
+        const r = calculateGearRadii(updatedGear.teeth, updatedGear.module);
+        const diam = r.addendum * 2;
+
+        const updatedTarget: Part = {
+          ...target,
+          gear: updatedGear,
+          w: diam,
+          h: diam,
+          name: `Engrenagem ${updatedGear.teeth}D`,
+        };
+
+        return prev.map((p) => {
+          if (p.id === partId) return updatedTarget;
+
+          // Se estiver acoplado por junta de engrenagem, reajusta posição e fase angular se móvel
+          const gearJoint = joints.find(
+            (j) =>
+              j.type === 'gear' &&
+              ((j.part1Id === partId && j.part2Id === p.id) || (j.part2Id === partId && j.part1Id === p.id))
+          );
+          if (gearJoint && p.type === 'gear' && p.gear) {
+            const isFixedP = p.pivots.some((pv) => pv.fixed && !pv.motor);
+            const idealPos = getIdealMeshedPosition(updatedTarget, p);
+            const meshedRot = calculateMeshedRotation(updatedTarget, p, isFixedP ? undefined : idealPos);
+            return {
+              ...p,
+              x: isFixedP ? p.x : idealPos.x,
+              y: isFixedP ? p.y : idealPos.y,
+              rot: meshedRot,
+            };
+          }
+
+          return p;
+        });
+      });
+
+      // Atualizar gearRatio nas juntas
+      setJoints((prev) =>
+        prev.map((j) => {
+          if (j.type !== 'gear' || !j.part1Id || !j.part2Id) return j;
+          if (j.part1Id === partId || j.part2Id === partId) {
+            const p1 = parts.find((p) => p.id === j.part1Id);
+            const p2 = parts.find((p) => p.id === j.part2Id);
+            const z1 = j.part1Id === partId ? (typeof updater === 'function' ? updater(p1!.gear!).teeth : updater.teeth || p1!.gear!.teeth) : p1?.gear?.teeth || 20;
+            const z2 = j.part2Id === partId ? (typeof updater === 'function' ? updater(p2!.gear!).teeth : updater.teeth || p2!.gear!.teeth) : p2?.gear?.teeth || 20;
+            return { ...j, gearRatio: z1 / z2 };
+          }
+          return j;
         })
       );
     },
-    [recordSnapshot]
+    [parts, joints, recordSnapshot]
   );
 
   const connectGears = useCallback(
@@ -458,11 +522,17 @@ export const useMechanismStore = () => {
 
       const idealPos = getIdealMeshedPosition(part1, part2);
       const isFixed2 = part2.pivots.some((pv) => pv.fixed && !pv.motor);
+      const meshedRot2 = calculateMeshedRotation(part1, part2, isFixed2 ? undefined : idealPos);
 
       setParts((prev) =>
         prev.map((p) => {
-          if (p.id === part2.id && !isFixed2) {
-            return { ...p, x: idealPos.x, y: idealPos.y };
+          if (p.id === part2.id) {
+            return {
+              ...p,
+              x: isFixed2 ? p.x : idealPos.x,
+              y: isFixed2 ? p.y : idealPos.y,
+              rot: meshedRot2,
+            };
           }
           return p;
         })
@@ -485,7 +555,7 @@ export const useMechanismStore = () => {
     [recordSnapshot]
   );
 
-  // Toggles Rápidos no Inspetor / Floating Bar
+  // Toggles Rápidos no Inspetor / Floating Bar (com exclusão mútua consistente)
   const togglePivotGround = useCallback(
     (pivotId: number) => {
       recordSnapshot();
@@ -499,6 +569,7 @@ export const useMechanismStore = () => {
               ...v,
               fixed: willFix,
               motor: willFix ? v.motor : false, // se desafixar, desliga motor
+              slider: willFix ? undefined : v.slider, // fixo exclui slider
             };
           }),
         }))
@@ -521,6 +592,7 @@ export const useMechanismStore = () => {
               ...v,
               motor: willMotor,
               fixed: willMotor ? true : v.fixed, // motor exige fixação ao terra
+              slider: willMotor ? undefined : v.slider, // motor exclui slider
             };
           }),
         }))
@@ -541,6 +613,8 @@ export const useMechanismStore = () => {
             const current = v.slider?.enabled;
             return {
               ...v,
+              fixed: current ? v.fixed : false, // slider exclui fixo
+              motor: current ? v.motor : false, // slider exclui motor
               slider: current
                 ? undefined
                 : {
@@ -746,9 +820,30 @@ export const useMechanismStore = () => {
       svg += `  <g transform="translate(${px.toFixed(1)}, ${py.toFixed(1)}) rotate(${deg.toFixed(1)})">\n`;
       if (p.type === 'circle') {
         svg += `    <circle cx="0" cy="0" r="${(p.w / 2).toFixed(1)}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2"/>\n`;
+      } else if (p.type === 'tri') {
+        const p1 = `${(-p.w / 2).toFixed(1)},${(p.h / 2).toFixed(1)}`;
+        const p2 = `${(p.w / 2).toFixed(1)},${(p.h / 2).toFixed(1)}`;
+        const p3 = `0,${(-p.h / 2).toFixed(1)}`;
+        svg += `    <polygon points="${p1} ${p2} ${p3}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2"/>\n`;
+      } else if (p.type === 'gear' && p.gear) {
+        const outline = generateGearOutline(p.gear, { x: 0, y: 0 }, 0);
+        const ptsStr = outline.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(' ');
+        svg += `    <polygon points="${ptsStr}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2"/>\n`;
+        const radii = calculateGearRadii(p.gear.teeth, p.gear.module);
+        svg += `    <circle cx="0" cy="0" r="${radii.pitch.toFixed(1)}" fill="none" stroke="#0284c7" stroke-width="1" stroke-dasharray="4,4"/>\n`;
+        svg += `    <circle cx="0" cy="0" r="${Math.max(6, radii.pitch * 0.25).toFixed(1)}" fill="#ffffff" stroke="#2563eb" stroke-width="1.5"/>\n`;
       } else {
         svg += `    <rect x="${(-p.w / 2).toFixed(1)}" y="${(-p.h / 2).toFixed(1)}" width="${p.w.toFixed(1)}" height="${p.h.toFixed(1)}" rx="${p.type === 'bar' ? (p.h / 2).toFixed(1) : 4}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2"/>\n`;
       }
+
+      // Fendas na peça
+      (p.slots || []).forEach((sl) => {
+        const slDeg = ((sl.angle || 0) * 180) / Math.PI;
+        svg += `    <g transform="translate(${sl.lx.toFixed(1)}, ${sl.ly.toFixed(1)}) rotate(${slDeg.toFixed(1)})">\n`;
+        svg += `      <rect x="${(-sl.length / 2).toFixed(1)}" y="${(-(sl.width || 12) / 2).toFixed(1)}" width="${sl.length.toFixed(1)}" height="${(sl.width || 12).toFixed(1)}" rx="${((sl.width || 12) / 2).toFixed(1)}" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>\n`;
+        svg += `    </g>\n`;
+      });
+
       svg += `  </g>\n`;
     });
 
