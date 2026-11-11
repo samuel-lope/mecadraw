@@ -602,6 +602,92 @@ export const useMechanismStore = () => {
     [recordSnapshot]
   );
 
+  const lockCoaxialGears = useCallback(
+    (part1Id: number, part2Id: number) => {
+      if (part1Id === part2Id) return;
+      const p1 = parts.find((p) => p.id === part1Id);
+      const p2 = parts.find((p) => p.id === part2Id);
+      if (!p1 || !p2) return;
+
+      recordSnapshot();
+
+      const targetPos = { x: p1.x, y: p1.y };
+      const isGround = p1.pivots.some((pv) => pv.fixed || pv.motor) || p2.pivots.some((pv) => pv.fixed || pv.motor);
+
+      setParts((prev) =>
+        prev.map((p) => {
+          if (p.id === part2Id) {
+            return {
+              ...p,
+              x: targetPos.x,
+              y: targetPos.y,
+              pivots: p.pivots.map((pv) => ({
+                ...pv,
+                fixed: isGround ? true : pv.fixed,
+              })),
+            };
+          }
+          if (p.id === part1Id && isGround) {
+            return {
+              ...p,
+              pivots: p.pivots.map((pv) => ({
+                ...pv,
+                fixed: isGround ? true : pv.fixed,
+              })),
+            };
+          }
+          return p;
+        })
+      );
+
+      const pv1 = p1.pivots[0]?.id || 0;
+      const pv2 = p2.pivots[0]?.id || 0;
+
+      const newJoint: Joint = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        p1: pv1,
+        p2: pv2,
+        part1Id,
+        part2Id,
+        type: 'weld',
+      };
+
+      setJoints((prev) => [
+        ...prev.filter(
+          (j) =>
+            !(
+              (j.part1Id === part1Id && j.part2Id === part2Id) ||
+              (j.part1Id === part2Id && j.part2Id === part1Id)
+            )
+        ),
+        newJoint,
+      ]);
+
+      simInstanceRef.current = null;
+      setSimLockedUp(false);
+    },
+    [parts, recordSnapshot]
+  );
+
+  const unlockCoaxialGears = useCallback(
+    (part1Id: number, part2Id: number) => {
+      recordSnapshot();
+      setJoints((prev) =>
+        prev.filter(
+          (j) =>
+            !(
+              j.type === 'weld' &&
+              ((j.part1Id === part1Id && j.part2Id === part2Id) ||
+                (j.part1Id === part2Id && j.part2Id === part1Id))
+            )
+        )
+      );
+      simInstanceRef.current = null;
+      setSimLockedUp(false);
+    },
+    [recordSnapshot]
+  );
+
   // Toggles Rápidos no Inspetor / Floating Bar (com exclusão mútua consistente)
   const togglePivotGround = useCallback(
     (pivotId: number) => {
@@ -966,6 +1052,8 @@ export const useMechanismStore = () => {
     addGearPart,
     updateGear,
     connectGears,
+    lockCoaxialGears,
+    unlockCoaxialGears,
     togglePivotGround,
     togglePivotMotor,
     togglePivotSlider,

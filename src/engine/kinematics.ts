@@ -50,12 +50,21 @@ export interface SimGear {
   initialDiff: number; // diferenca angular de fase
 }
 
+export interface SimWeld {
+  part1Id: number;
+  part2Id: number;
+  p1: number;
+  p2: number;
+  initialDiff: number; // diferenca angular entre part1 e part2 (geralmente 0)
+}
+
 export interface SimulationInstance {
   particles: Record<number, SimParticle>;
   distanceConstraints: DistanceConstraint[];
   joints: [number, number][];
   pinInSlots: SimPinInSlot[];
   gears: SimGear[];
+  welds: SimWeld[];
   motors: SimMotor[];
   time: number;
   errorResidual: number;
@@ -68,6 +77,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
   const simJoints: [number, number][] = [];
   const simPinInSlots: SimPinInSlot[] = [];
   const simGears: SimGear[] = [];
+  const simWelds: SimWeld[] = [];
   const motors: SimMotor[] = [];
 
   // 1. Inicializar partículas a partir dos pivôs das peças
@@ -157,6 +167,21 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
         const initialDiff = g2.rot - (-ratio * g1.rot);
         simGears.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
       }
+    } else if (j.type === 'weld' && j.part1Id && j.part2Id) {
+      const p1 = parts.find((p) => p.id === j.part1Id);
+      const p2 = parts.find((p) => p.id === j.part2Id);
+      if (p1 && p2) {
+        simWelds.push({
+          part1Id: p1.id,
+          part2Id: p2.id,
+          p1: j.p1,
+          p2: j.p2 ?? j.p1,
+          initialDiff: p2.rot - p1.rot,
+        });
+        if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
+          simJoints.push([j.p1, j.p2]);
+        }
+      }
     } else if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
       simJoints.push([j.p1, j.p2]);
     }
@@ -191,6 +216,7 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     joints: simJoints,
     pinInSlots: simPinInSlots,
     gears: simGears,
+    welds: simWelds,
     motors,
     time: 0,
     errorResidual: 0,
@@ -480,6 +506,56 @@ export const stepSimulation = (
         }
       }
     }
+
+    // F. Restrições de Engrenagens Solidárias / Eixo Coaxial (Welds)
+    for (const w of sim.welds) {
+      const p1 = parts.find((p) => p.id === w.part1Id);
+      const p2 = parts.find((p) => p.id === w.part2Id);
+      if (!p1 || !p2) continue;
+
+      if (p1.pivots.length >= 2) {
+        p1.rot = computePartPose(p1, sim.particles).rot;
+      }
+      if (p2.pivots.length >= 2) {
+        p2.rot = computePartPose(p2, sim.particles).rot;
+      }
+
+      // Sincronização 1:1 de rotação: rot2 = rot1 + initialDiff
+      const desiredRot2 = p1.rot + w.initialDiff;
+      let rotErr = p2.rot - desiredRot2;
+      rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
+
+      const equivLinearErr = Math.abs(rotErr) * 20.0;
+      maxResidual = Math.max(maxResidual, equivLinearErr);
+
+      const p1Motor = p1.pivots.some((pv) => pv.motor);
+      const p2Motor = p2.pivots.some((pv) => pv.motor);
+      const p1Fixed = p1.pivots.some((pv) => pv.fixed);
+      const p2Fixed = p2.pivots.some((pv) => pv.fixed);
+
+      if ((p1Motor || p1Fixed) && !(p2Motor || p2Fixed)) {
+        p2.rot -= rotErr;
+      } else if (!(p1Motor || p1Fixed) && (p2Motor || p2Fixed)) {
+        p1.rot += rotErr;
+      } else {
+        p2.rot -= rotErr * 0.5;
+        p1.rot += rotErr * 0.5;
+      }
+
+      // Sincronizar partículas dos pivôs excêntricos das engrenagens soldadas (se houver)
+      for (const p of [p1, p2]) {
+        if (p.pivots.length > 1) {
+          p.pivots.forEach((pv) => {
+            const sp = sim.particles[pv.id];
+            if (sp && !sp.fixed) {
+              const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
+              sp.x = p.x + rx;
+              sp.y = p.y + ry;
+            }
+          });
+        }
+      }
+    }
   }
 
   sim.errorResidual = maxResidual;
@@ -650,10 +726,11 @@ export const stepPausedTrails = (
 export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnalysis => {
   const groundPivots = parts.flatMap(p => p.pivots).filter(pv => pv.fixed || pv.motor);
   const hasGround = groundPivots.length > 0;
-  const numLinks = parts.length + (hasGround ? 1 : 0);
+  const numWeldJoints = joints.filter((j) => j.type === 'weld').length;
+  const numLinks = Math.max(1, parts.length - numWeldJoints + (hasGround ? 1 : 0));
 
   // Contagem de juntas J1 (revolutas, fixas, sliders) e J2 (pino em fenda e engrenamentos)
-  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot' && j.type !== 'gear').length;
+  const numRevolute = joints.filter((j) => j.type !== 'pin-in-slot' && j.type !== 'gear' && j.type !== 'weld').length;
   const numPinInSlots = joints.filter((j) => j.type === 'pin-in-slot').length;
   const numFixedJoints = groundPivots.length;
   const numSliders = parts.flatMap((p) => p.pivots).filter((pv) => pv.slider?.enabled).length;

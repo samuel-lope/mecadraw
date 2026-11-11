@@ -24,6 +24,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     connectPinToSlot,
     updateGear,
     connectGears,
+    lockCoaxialGears,
+    unlockCoaxialGears,
     camera,
     setCamera,
     togglePivotGround,
@@ -43,7 +45,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
 
   // Outros alvos (eixos, fendas e engrenagens) disponíveis para conexão
   const otherTargets: {
-    type: 'pivot' | 'slot' | 'gear';
+    type: 'pivot' | 'slot' | 'gear' | 'weld';
     id: string;
     label: string;
     part: typeof parts[0];
@@ -81,6 +83,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             label: `Engrenar com Peça ${p.letter || 'A'} (${p.gear.teeth}D)`,
             part: p,
           });
+          otherTargets.push({
+            type: 'weld',
+            id: `weld:${p.id}`,
+            label: `Travar no Mesmo Eixo com Peça ${p.letter || 'A'} (Solidária)`,
+            part: p,
+          });
         }
       }
     });
@@ -107,6 +115,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             return {
               joint: j,
               partnerInfo: `Engrenagem ${partnerPart?.letter || 'A'} (i = ${(j.gearRatio || 1).toFixed(2)})`,
+              isSlot: false,
+            };
+          }
+          if (j.type === 'weld') {
+            const partnerPartId = (selPart && j.part1Id === selPart.id) ? j.part2Id : j.part1Id;
+            const partnerPart = parts.find((p) => p.id === partnerPartId);
+            return {
+              joint: j,
+              partnerInfo: `Eixo Composto c/ Peça ${partnerPart?.letter || 'B'} (Solidária)`,
               isSlot: false,
             };
           }
@@ -305,6 +322,64 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                   </div>
                 </div>
               );
+            })()}
+
+            {/* Eixo Solidário (Redução Composta / Eixo Compartilhado) */}
+            {(() => {
+              const weldJoint = joints.find(
+                (j) => j.type === 'weld' && (j.part1Id === selPart.id || j.part2Id === selPart.id)
+              );
+              const partnerId = weldJoint ? (weldJoint.part1Id === selPart.id ? weldJoint.part2Id : weldJoint.part1Id) : null;
+              const partnerPart = partnerId ? parts.find((p) => p.id === partnerId) : null;
+
+              if (weldJoint && partnerPart) {
+                return (
+                  <div className="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-950/40 rounded-md border border-blue-200 dark:border-blue-900 text-xs">
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-blue-700 dark:text-blue-300">
+                        🔗 Eixo Composto (Solidária)
+                      </span>
+                      <span className="text-[10px] text-blue-600 dark:text-blue-400">
+                        Travada com Peça {partnerPart.letter || 'B'} ({partnerPart.gear?.teeth}D) — Giro 1:1
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => unlockCoaxialGears(selPart.id, partnerPart.id)}
+                      className="px-2 py-1 text-[10px] font-medium bg-white dark:bg-slate-800 text-rose-600 hover:bg-rose-50 rounded border border-rose-200 dark:border-rose-900/50 transition-colors"
+                      title="Destravar do mesmo eixo"
+                    >
+                      Destravar
+                    </button>
+                  </div>
+                );
+              }
+
+              // Se não estiver travada, verificar se há engrenagem concêntrica próxima
+              const concentric = parts.find(
+                (p) => p.id !== selPart.id && p.type === 'gear' && Math.hypot(p.x - selPart.x, p.y - selPart.y) <= 8
+              );
+              if (concentric) {
+                return (
+                  <div className="flex items-center justify-between p-2 bg-amber-50 dark:bg-amber-950/40 rounded-md border border-amber-200 dark:border-amber-900 text-xs">
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-amber-700 dark:text-amber-300">
+                        Engrenagem Concêntrica
+                      </span>
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                        Alinhada ao centro da Peça {concentric.letter || 'B'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => lockCoaxialGears(selPart.id, concentric.id)}
+                      className="px-2 py-1 text-[10px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                    >
+                      Travar Eixo
+                    </button>
+                  </div>
+                );
+              }
+
+              return null;
             })()}
 
             {/* Toggle de Contatos de Engrenagem */}
@@ -907,6 +982,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                         connectPinToSlot({ part: selPart, pivot: selPivot }, { part: target.part, slot: target.slot });
                       } else if (target.type === 'gear') {
                         connectGears(selPart, target.part);
+                      } else if (target.type === 'weld') {
+                        lockCoaxialGears(selPart.id, target.part.id);
                       }
                       setSelectedTargetPivotId('');
                     }}

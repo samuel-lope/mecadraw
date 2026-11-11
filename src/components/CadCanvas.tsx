@@ -107,6 +107,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     connectPinToSlot,
     addGearPart,
     connectGears,
+    lockCoaxialGears,
+    unlockCoaxialGears,
     pendingJointPivot,
     setPendingJointPivot,
     togglePivotGround,
@@ -569,6 +571,67 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'center';
         ctx.fillText(badgeText, badgeX + badgeWidth / 2, badgeY + 11);
+        return;
+      }
+
+      // Juntas de Eixo Composto / Soldadas (Engrenagens Solidárias no mesmo eixo)
+      if (j.type === 'weld') {
+        const p1 = parts.find((p) => p.id === j.part1Id);
+        const p2 = parts.find((p) => p.id === j.part2Id);
+        if (!p1 || !p2 || p1.hidden || p2.hidden) return;
+
+        const centerPos = { x: p1.x, y: p1.y };
+        const sc = worldToScreen(centerPos, camera, w, h);
+
+        ctx.save();
+        // 1. Anel concêntrico de acoplamento técnico (flange metálico)
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([4, 2]);
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 16, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 2. Entalhes de chaveta (Keyway) no cubo
+        ctx.fillStyle = '#1d4ed8';
+        ctx.fillRect(sc.x - 2, sc.y - 18, 4, 5);
+        ctx.fillRect(sc.x - 2, sc.y + 13, 4, 5);
+
+        // 3. Halo suave de acoplamento rígido
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.18)';
+        ctx.beginPath();
+        ctx.arc(sc.x, sc.y, 20, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // 4. Badge "Eixo Composto: A + B (1:1)" se selecionada ou com hover
+        const isSelectedOrHovered =
+          selection.partId === p1.id ||
+          selection.partId === p2.id ||
+          hoveredPart?.id === p1.id ||
+          hoveredPart?.id === p2.id;
+
+        if (isSelectedOrHovered) {
+          const badgeText = `Eixo Composto: ${p1.letter || 'A'} + ${p2.letter || 'B'} (1:1)`;
+          ctx.font = 'bold 9px monospace';
+          const bWidth = ctx.measureText(badgeText).width + 12;
+          const bX = sc.x - bWidth / 2;
+          const bY = sc.y + 24;
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+          ctx.beginPath();
+          ctx.roundRect(bX, bY, bWidth, 16, 4);
+          ctx.fill();
+
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = '#60a5fa';
+          ctx.textAlign = 'center';
+          ctx.fillText(badgeText, sc.x, bY + 11);
+        }
+        ctx.restore();
         return;
       }
 
@@ -1293,7 +1356,20 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         newRot = Math.round(newRot / step) * step;
       }
 
+      const deltaRot = newRot - part.rot;
       updatePart(part.id, (p) => ({ ...p, rot: newRot }));
+
+      // Sincronizar rotação de peças soldadas no mesmo eixo
+      const weldedJoints = joints.filter(
+        (j) => j.type === 'weld' && (j.part1Id === part.id || j.part2Id === part.id)
+      );
+      for (const wj of weldedJoints) {
+        const partnerId = wj.part1Id === part.id ? wj.part2Id : wj.part1Id;
+        if (partnerId) {
+          updatePart(partnerId, (p) => ({ ...p, rot: p.rot + deltaRot }));
+        }
+      }
+
       setDragState((prev) => (prev ? { ...prev, curWorld: rawWorld } : null));
       return;
     }
@@ -1395,29 +1471,63 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         newY = Math.round(newY / camera.gridSize) * camera.gridSize;
       }
 
-      // Auto-snap magnético para engrenagens com alinhamento de fase de dentes
+      // 1. Auto-snap concêntrico magnético para engrenagens no mesmo eixo (Solidárias)
       let newRot = dragState.targetPart.rot;
       if (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
         const otherGears = parts.filter(
           (op) => op.id !== dragState.targetPart!.id && op.type === 'gear' && op.gear && !op.hidden
         );
+        let snappedConcentric = false;
         for (const og of otherGears) {
-          const testPart: Part = { ...dragState.targetPart, x: newX, y: newY };
-          const contact = calculateGearContact(og, testPart);
-          if (contact) {
-            const idealPos = getIdealMeshedPosition(og, testPart);
-            const distToIdeal = Math.hypot(newX - idealPos.x, newY - idealPos.y);
-            if (distToIdeal < 18) {
-              newX = idealPos.x;
-              newY = idealPos.y;
-              newRot = calculateMeshedRotation(og, testPart, idealPos);
-              break;
+          const distCenters = Math.hypot(newX - og.x, newY - og.y);
+          if (distCenters < 14) {
+            newX = og.x;
+            newY = og.y;
+            snappedConcentric = true;
+            break;
+          }
+        }
+
+        // 2. Auto-snap magnético para engrenamento externo com alinhamento de fase de dentes
+        if (!snappedConcentric) {
+          for (const og of otherGears) {
+            const testPart: Part = { ...dragState.targetPart, x: newX, y: newY };
+            const contact = calculateGearContact(og, testPart);
+            if (contact) {
+              const idealPos = getIdealMeshedPosition(og, testPart);
+              const distToIdeal = Math.hypot(newX - idealPos.x, newY - idealPos.y);
+              if (distToIdeal < 18) {
+                newX = idealPos.x;
+                newY = idealPos.y;
+                newRot = calculateMeshedRotation(og, testPart, idealPos);
+                break;
+              }
             }
           }
         }
       }
 
+      const moveDx = newX - dragState.targetPart.x;
+      const moveDy = newY - dragState.targetPart.y;
+      const dRot = newRot - dragState.targetPart.rot;
+
       updatePart(dragState.targetPart.id, (p) => ({ ...p, x: newX, y: newY, rot: newRot }));
+
+      // Transladar engrenagens e peças solidárias em bloco
+      const weldedJoints = joints.filter(
+        (j) => j.type === 'weld' && (j.part1Id === dragState.targetPart!.id || j.part2Id === dragState.targetPart!.id)
+      );
+      for (const wj of weldedJoints) {
+        const partnerId = wj.part1Id === dragState.targetPart!.id ? wj.part2Id : wj.part1Id;
+        if (partnerId) {
+          updatePart(partnerId, (p) => ({
+            ...p,
+            x: p.x + moveDx,
+            y: p.y + moveDy,
+            rot: p.rot + dRot,
+          }));
+        }
+      }
       return;
     }
   };
@@ -1522,6 +1632,44 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       {selectedPart && !simRunning && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 bg-white/90 dark:bg-slate-800/90 backdrop-blur-md rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 z-10 transition-all">
           <span className="font-semibold mr-1">{selectedPart.name}:</span>
+
+          {/* Ação de Engrenagem Solidária (Mesmo Eixo) */}
+          {selectedPart.type === 'gear' && (() => {
+            const weldJoint = joints.find(
+              (j) => j.type === 'weld' && (j.part1Id === selectedPart.id || j.part2Id === selectedPart.id)
+            );
+            const partnerId = weldJoint ? (weldJoint.part1Id === selectedPart.id ? weldJoint.part2Id : weldJoint.part1Id) : null;
+            const partnerPart = partnerId ? parts.find((p) => p.id === partnerId) : null;
+
+            if (weldJoint && partnerPart) {
+              return (
+                <button
+                  onClick={() => unlockCoaxialGears(selectedPart.id, partnerPart.id)}
+                  className="px-2 py-1 rounded bg-amber-500 hover:bg-amber-600 text-white font-medium transition-colors"
+                  title="Destravar do mesmo eixo"
+                >
+                  🔓 Destravar Eixo
+                </button>
+              );
+            }
+
+            const concentric = parts.find(
+              (p) => p.id !== selectedPart.id && p.type === 'gear' && Math.hypot(p.x - selectedPart.x, p.y - selectedPart.y) <= 8
+            );
+            if (concentric) {
+              return (
+                <button
+                  onClick={() => lockCoaxialGears(selectedPart.id, concentric.id)}
+                  className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors animate-pulse"
+                  title={`Travar no mesmo eixo que a Peça ${concentric.letter || 'B'} (Solidária)`}
+                >
+                  🔗 Travar no Mesmo Eixo
+                </button>
+              );
+            }
+
+            return null;
+          })()}
           {selectedPivot ? (
             <>
               <button
