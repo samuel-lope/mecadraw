@@ -14,7 +14,8 @@ import {
   slotWorldCenter,
   worldToScreen,
 } from '../engine/geometry';
-import { Part, PartSlot, Pivot, Point2D } from '../types/mechanism';
+import { Joint, Part, PartSlot, Pivot, Point2D } from '../types/mechanism';
+import { applyStrokeLineStyle, hexToRgba } from '../engine/style';
 import { createBar } from '../engine/presets';
 import {
   calculateGearContact,
@@ -149,7 +150,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     isHovered: boolean,
     cam: typeof camera,
     cw: number,
-    ch: number
+    ch: number,
+    beltJoint?: Joint
   ) => {
     const sC1 = worldToScreen(geom.c1, cam, cw, ch);
     const sC2 = worldToScreen(geom.c2, cam, cw, ch);
@@ -160,7 +162,15 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
     const sR1 = geom.r1 * cam.zoom;
     const sR2 = geom.r2 * cam.zoom;
-    const beltThick = Math.max(4, 5.5 * cam.zoom);
+
+    const customFill = beltJoint?.style?.fillColor;
+    const customStroke = beltJoint?.style?.strokeColor || beltJoint?.color;
+    const customWidth = beltJoint?.style?.strokeWidth ?? beltJoint?.beltWidth;
+    const customOpacity = beltJoint?.style?.opacity;
+    const customStyle = beltJoint?.style?.strokeStyle;
+
+    const defaultThick = Math.max(4, 5.5 * cam.zoom);
+    const beltThick = customWidth !== undefined ? Math.max(2, customWidth * cam.zoom * 0.9) : defaultThick;
 
     ctx.save();
 
@@ -173,6 +183,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     beltPath.arc(sC1.x, sC1.y, sR1, geom.l, geom.u, true);
     beltPath.closePath();
 
+    // 1.1 Preenchimento interno do circuito da correia (se configurado)
+    if (customFill) {
+      const fillAlpha = customOpacity !== undefined ? customOpacity : 0.15;
+      ctx.fillStyle = hexToRgba(customFill, fillAlpha);
+      ctx.fill(beltPath);
+    }
+
     // 2. Halo de Seleção / Hover
     if (isSelected || isHovered) {
       ctx.strokeStyle = isSelected ? '#3b82f6' : '#10b981';
@@ -182,12 +199,15 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.stroke(beltPath);
     }
 
-    // 3. Dorso da Correia (Banda grafite/antracite #1e293b)
-    ctx.strokeStyle = '#1e293b';
+    // 3. Dorso da Correia (Banda grafite/antracite #1e293b ou personalizada)
+    ctx.save();
+    applyStrokeLineStyle(ctx, customStyle, cam.zoom);
+    ctx.strokeStyle = customStroke || '#1e293b';
     ctx.lineWidth = beltThick;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke(beltPath);
+    ctx.restore();
 
     // 4. Pontilhado Dinâmico dos Dentes (Ciano fluorescente #38bdf8 em movimento no sentido do giro)
     ctx.strokeStyle = isSelected ? '#93c5fd' : '#38bdf8';
@@ -483,17 +503,26 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       }
 
       // Preenchimento e contorno
-      const baseFill = p.color || primaryCol;
-      ctx.fillStyle = isSelected
-        ? 'rgba(37, 99, 235, 0.28)'
-        : isHovered
-        ? 'rgba(37, 99, 235, 0.18)'
-        : 'rgba(37, 99, 235, 0.10)';
+      const customFill = p.style?.fillColor || p.color;
+      const customStroke = p.style?.strokeColor || p.color;
+      const customWidth = p.style?.strokeWidth;
+      const customOpacity = p.style?.opacity;
+      const customStyle = p.style?.strokeStyle;
+
+      const baseFill = customFill || primaryCol;
+      const baseStroke = customStroke || primaryCol;
+      const defaultAlpha = isSelected ? 0.28 : isHovered ? 0.18 : 0.10;
+      const fillAlpha = customOpacity !== undefined ? customOpacity : defaultAlpha;
+
+      ctx.fillStyle = hexToRgba(baseFill, fillAlpha);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? '#2563eb' : baseFill;
-      ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      ctx.save();
+      applyStrokeLineStyle(ctx, customStyle, camera.zoom);
+      ctx.strokeStyle = isSelected ? '#2563eb' : baseStroke;
+      ctx.lineWidth = isSelected ? Math.max(2.5, (customWidth ?? 1.5) + 1) : (customWidth ?? 1.5);
       ctx.stroke();
+      ctx.restore();
 
       if (p.type === 'gear' && p.gear) {
         const radii = calculateGearRadii(p.gear.teeth, p.gear.module);
@@ -622,7 +651,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         if (geom) {
           const isSelected = selection.jointId === j.id;
           const isHovered = hoveredJointId === j.id;
-          drawTimingBelt(ctx, geom, g1, g2, isSelected, isHovered, camera, w, h);
+          drawTimingBelt(ctx, geom, g1, g2, isSelected, isHovered, camera, w, h, j);
         }
       }
     });

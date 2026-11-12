@@ -52,6 +52,16 @@ export interface GearData {
 
 export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon' | 'gear';
 
+export type StrokeLineStyle = 'solid' | 'dashed' | 'dotted' | 'dashdot';
+
+export interface ElementStyle {
+  strokeColor?: string;
+  strokeWidth?: number; // 1 a 10 mm/px
+  strokeStyle?: StrokeLineStyle;
+  fillColor?: string;
+  opacity?: number; // 0.0 a 1.0 (opacidade de preenchimento)
+}
+
 export interface Part {
   id: number;
   letter?: string; // Letra identificadora sequencial (ex: A, B, C)
@@ -66,6 +76,7 @@ export interface Part {
   slots?: PartSlot[]; // Fendas internas mecânicas por onde eixos correm
   gear?: GearData; // Dados paramétricos se type === 'gear'
   color?: string;
+  style?: ElementStyle; // Personalização visual completa
   locked?: boolean;
   hidden?: boolean; // Peça e eixos ocultos visualmente (mantém cálculo cinemático)
 }
@@ -81,6 +92,7 @@ export interface Joint {
   type?: 'revolute' | 'weld' | 'pin-in-slot' | 'gear' | 'belt';
   beltWidth?: number; // Largura visual da correia em mm (padrão 6mm)
   color?: string;
+  style?: ElementStyle; // Personalização visual completa
 }
 
 export type ToolType =

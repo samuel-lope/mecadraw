@@ -1,8 +1,167 @@
 import React, { useState } from 'react';
 import { MechanismStore } from '../state/useMechanismStore';
-import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff } from 'lucide-react';
+import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff, Palette, RotateCcw } from 'lucide-react';
 import { calculateGearRadii } from '../engine/gearGeometry';
 import { calculateBeltGeometry } from '../engine/beltGeometry';
+import { ElementStyle, StrokeLineStyle } from '../types/mechanism';
+
+const PRESET_COLORS = [
+  '#2563eb', // Azul Royal
+  '#06b6d4', // Ciano
+  '#10b981', // Esmeralda / Verde
+  '#f59e0b', // Âmbar / Laranja
+  '#ef4444', // Vermelho
+  '#8b5cf6', // Roxo
+  '#475569', // Cinza Aço
+  '#1e293b', // Antracite / Grafite
+];
+
+interface AppearanceSectionProps {
+  title?: string;
+  style?: ElementStyle;
+  defaultStroke?: string;
+  defaultFill?: string;
+  defaultWidth?: number;
+  defaultOpacity?: number;
+  onChange: (patch: Partial<ElementStyle>) => void;
+  onReset: () => void;
+}
+
+const AppearanceSection: React.FC<AppearanceSectionProps> = ({
+  title = 'Aparência & Estilo',
+  style,
+  defaultStroke = '#2563eb',
+  defaultFill = '#2563eb',
+  defaultWidth = 1.5,
+  defaultOpacity = 0.15,
+  onChange,
+  onReset,
+}) => {
+  const currentStroke = style?.strokeColor || defaultStroke;
+  const currentFill = style?.fillColor || defaultFill;
+  const currentWidth = style?.strokeWidth !== undefined ? style.strokeWidth : defaultWidth;
+  const currentStyle = style?.strokeStyle || 'solid';
+  const currentOpacity = style?.opacity !== undefined ? style.opacity : defaultOpacity;
+
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-slate-100 dark:border-slate-800 pt-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Palette className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+          <h4 className="font-semibold text-slate-900 dark:text-slate-100 text-[11px] uppercase tracking-wider">
+            {title}
+          </h4>
+        </div>
+        <button
+          onClick={onReset}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          title="Restaurar estilo padrão"
+        >
+          <RotateCcw className="w-3 h-3" />
+          <span>Restaurar</span>
+        </button>
+      </div>
+
+      {/* Paleta rápida de cores */}
+      <div className="flex items-center justify-between gap-1">
+        {PRESET_COLORS.map((hex) => (
+          <button
+            key={hex}
+            onClick={() => onChange({ strokeColor: hex, fillColor: hex })}
+            className="w-5 h-5 rounded-full border border-slate-300 dark:border-slate-700 hover:scale-110 transition-transform shadow-xs cursor-pointer"
+            style={{ backgroundColor: hex }}
+            title={`Definir cor ${hex}`}
+          />
+        ))}
+      </div>
+
+      {/* Cor do Contorno */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] text-slate-500 font-medium">Cor do Contorno</span>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="color"
+            value={currentStroke.startsWith('#') && currentStroke.length === 7 ? currentStroke : '#2563eb'}
+            onChange={(e) => onChange({ strokeColor: e.target.value })}
+            className="w-6 h-6 p-0 border border-slate-300 dark:border-slate-700 rounded cursor-pointer bg-transparent"
+          />
+          <span className="font-mono text-[10px] text-slate-600 dark:text-slate-300 uppercase">
+            {currentStroke}
+          </span>
+        </div>
+      </div>
+
+      {/* Espessura da Linha */}
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-[10px]">
+          <span className="text-slate-500 font-medium">Espessura da Linha</span>
+          <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+            {currentWidth} px
+          </span>
+        </div>
+        <input
+          type="range"
+          min="1"
+          max="10"
+          step="0.5"
+          value={currentWidth}
+          onChange={(e) => onChange({ strokeWidth: parseFloat(e.target.value) })}
+          className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none"
+        />
+      </div>
+
+      {/* Tipo de Linha */}
+      <div className="flex flex-col gap-1">
+        <span className="text-[10px] text-slate-500 font-medium">Tipo de Linha</span>
+        <select
+          value={currentStyle}
+          onChange={(e) => onChange({ strokeStyle: e.target.value as StrokeLineStyle })}
+          className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none text-xs text-slate-700 dark:text-slate-200 cursor-pointer"
+        >
+          <option value="solid">Sólida (──────)</option>
+          <option value="dashed">Tracejada (– – –)</option>
+          <option value="dotted">Pontilhada (· · ·)</option>
+          <option value="dashdot">Traço-Ponto (– · –)</option>
+        </select>
+      </div>
+
+      {/* Cor de Preenchimento */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] text-slate-500 font-medium">Preenchimento</span>
+        <div className="flex items-center gap-1.5">
+          <input
+            type="color"
+            value={currentFill.startsWith('#') && currentFill.length === 7 ? currentFill : '#2563eb'}
+            onChange={(e) => onChange({ fillColor: e.target.value })}
+            className="w-6 h-6 p-0 border border-slate-300 dark:border-slate-700 rounded cursor-pointer bg-transparent"
+          />
+          <span className="font-mono text-[10px] text-slate-600 dark:text-slate-300 uppercase">
+            {currentFill}
+          </span>
+        </div>
+      </div>
+
+      {/* Opacidade do Preenchimento */}
+      <div className="flex flex-col gap-1">
+        <div className="flex justify-between items-center text-[10px]">
+          <span className="text-slate-500 font-medium">Opacidade</span>
+          <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+            {Math.round(currentOpacity * 100)}%
+          </span>
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={currentOpacity}
+          onChange={(e) => onChange({ opacity: parseFloat(e.target.value) })}
+          className="w-full accent-blue-600 cursor-pointer h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none"
+        />
+      </div>
+    </div>
+  );
+};
 
 interface InspectorPanelProps {
   store: MechanismStore;
@@ -15,10 +174,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     selection,
     setSelection,
     updatePart,
+    updatePartStyle,
+    resetPartStyle,
     deletePart,
     deletePivot,
     connectJoint,
     disconnectJoint,
+    updateJointStyle,
+    resetJointStyle,
     addSlotToPart,
     updateSlot,
     deleteSlot,
@@ -242,6 +405,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded text-[11px] text-blue-700 dark:text-blue-300">
                 A correia dentada transmite rotação no mesmo sentido. Arrastar qualquer uma das engrenagens ajusta dinamicamente o comprimento e a quantidade de dentes.
               </div>
+
+              <AppearanceSection
+                title="Estilo da Correia"
+                style={selJoint.style}
+                defaultStroke={selJoint.color || '#1e293b'}
+                defaultFill="#06b6d4"
+                defaultWidth={selJoint.beltWidth || 5}
+                defaultOpacity={0.15}
+                onChange={(patch) => updateJointStyle(selJoint.id, patch)}
+                onReset={() => resetJointStyle(selJoint.id)}
+              />
             </div>
           ) : (
             <div className="text-slate-400">Engrenagens da correia indisponíveis.</div>
@@ -644,6 +818,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           </label>
         </div>
       </div>
+
+      {/* Aparência & Estilo */}
+      <AppearanceSection
+        title={selPart.type === 'gear' ? 'Estilo da Engrenagem' : 'Aparência & Estilo'}
+        style={selPart.style}
+        defaultStroke={selPart.color || '#2563eb'}
+        defaultFill={selPart.color || '#2563eb'}
+        defaultWidth={1.5}
+        defaultOpacity={0.15}
+        onChange={(patch) => updatePartStyle(selPart.id, patch)}
+        onReset={() => resetPartStyle(selPart.id)}
+      />
 
       {/* Lista de Eixos com Identificadores */}
       <div className="flex flex-col gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">

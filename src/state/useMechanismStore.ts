@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Camera,
+  ElementStyle,
   GearData,
   GearProfileType,
   Joint,
@@ -259,6 +260,78 @@ export const useMechanismStore = () => {
       setSimLockedUp(false);
     },
     []
+  );
+
+  const updatePartStyle = useCallback(
+    (partId: number, styleUpdate: Partial<ElementStyle>) => {
+      recordSnapshot();
+      setParts((prev) =>
+        prev.map((p) => {
+          if (p.id !== partId) return p;
+          const mergedStyle = { ...(p.style || {}), ...styleUpdate };
+          return {
+            ...p,
+            style: mergedStyle,
+            color: mergedStyle.strokeColor || mergedStyle.fillColor || p.color,
+          };
+        })
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const resetPartStyle = useCallback(
+    (partId: number) => {
+      recordSnapshot();
+      setParts((prev) =>
+        prev.map((p) => {
+          if (p.id !== partId) return p;
+          const { style: _discarded, ...rest } = p;
+          return {
+            ...rest,
+            color: undefined,
+          };
+        })
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const updateJointStyle = useCallback(
+    (jointId: number, styleUpdate: Partial<ElementStyle>) => {
+      recordSnapshot();
+      setJoints((prev) =>
+        prev.map((j) => {
+          if (j.id !== jointId) return j;
+          const mergedStyle = { ...(j.style || {}), ...styleUpdate };
+          return {
+            ...j,
+            style: mergedStyle,
+            color: mergedStyle.strokeColor || mergedStyle.fillColor || j.color,
+            beltWidth: mergedStyle.strokeWidth !== undefined ? mergedStyle.strokeWidth : j.beltWidth,
+          };
+        })
+      );
+    },
+    [recordSnapshot]
+  );
+
+  const resetJointStyle = useCallback(
+    (jointId: number) => {
+      recordSnapshot();
+      setJoints((prev) =>
+        prev.map((j) => {
+          if (j.id !== jointId) return j;
+          const { style: _discarded, ...rest } = j;
+          return {
+            ...rest,
+            color: undefined,
+            beltWidth: 6,
+          };
+        })
+      );
+    },
+    [recordSnapshot]
   );
 
   const deletePart = useCallback(
@@ -1146,11 +1219,15 @@ export const useMechanismStore = () => {
     getSimTime,
     addPart,
     updatePart,
+    updatePartStyle,
+    resetPartStyle,
     deletePart,
     addPivotToPart,
     deletePivot,
     connectJoint,
     disconnectJoint,
+    updateJointStyle,
+    resetJointStyle,
     addSlotToPart,
     updateSlot,
     deleteSlot,
