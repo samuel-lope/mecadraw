@@ -50,7 +50,13 @@ export interface GearData {
   profile?: GearProfileType; // 'involute' | 'trapezoidal' | 'cycloidal'
 }
 
-export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon' | 'gear';
+export interface PulleyData {
+  diameter: number; // Diâmetro nominal da polia em mm (padrão 80 mm)
+  friction?: number; // Coeficiente de aderência / atrito 0.0 a 1.0 (padrão 1.0)
+  spokes?: number; // Número de raios visuais (padrão 4)
+}
+
+export type PartType = 'bar' | 'rect' | 'circle' | 'tri' | 'polygon' | 'gear' | 'pulley';
 
 export type StrokeLineStyle = 'solid' | 'dashed' | 'dotted' | 'dashdot';
 
@@ -75,6 +81,7 @@ export interface Part {
   pivots: Pivot[];
   slots?: PartSlot[]; // Fendas internas mecânicas por onde eixos correm
   gear?: GearData; // Dados paramétricos se type === 'gear'
+  pulley?: PulleyData; // Dados paramétricos se type === 'pulley'
   color?: string;
   style?: ElementStyle; // Personalização visual completa
   locked?: boolean;
@@ -102,6 +109,7 @@ export type ToolType =
   | 'circle'
   | 'tri'
   | 'gear'
+  | 'pulley'
   | 'belt'
   | 'axis'
   | 'slot'

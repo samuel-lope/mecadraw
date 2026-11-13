@@ -26,9 +26,17 @@ import {
 } from '../engine/gearGeometry';
 import {
   calculateBeltGeometry,
+  closestPointOnBelt,
   hitBelt,
   BeltGeometryData,
 } from '../engine/beltGeometry';
+import {
+  calculateFrictionWheelContact,
+  closestPointOnPartBoundary,
+  getIdealFrictionSnapPosition,
+  getPartFriction,
+  getRotaryRadius,
+} from '../engine/pulleyGeometry';
 
 interface CadCanvasProps {
   store: MechanismStore;
@@ -116,6 +124,7 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     deleteSlot,
     connectPinToSlot,
     addGearPart,
+    addPulleyPart,
     connectGears,
     connectBelt,
     lockCoaxialGears,
@@ -223,7 +232,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
     const sMidX = (sT1b.x + sT2b.x) / 2;
     const sMidY = (sT1b.y + sT2b.y) / 2;
 
-    const badgeText = `Correia: L=${geom.totalLength.toFixed(1)}mm | ${geom.teethCount}D (${gear1.gear?.teeth || 20}:${gear2.gear?.teeth || 20})`;
+    const badgeText = geom.hasTeeth
+      ? `Correia: L=${geom.totalLength.toFixed(1)}mm | ${geom.teethCount}D (${gear1.gear?.teeth || '-'}:${gear2.gear?.teeth || '-'})`
+      : `Correia: L=${geom.totalLength.toFixed(1)}mm | Rel ${geom.ratio.toFixed(2)}:1`;
     ctx.font = 'bold 9px monospace';
     const bW = ctx.measureText(badgeText).width + 12;
     const bH = 16;
@@ -480,8 +491,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       ctx.rotate(p.rot);
 
       ctx.beginPath();
-      if (p.type === 'circle') {
-        ctx.arc(0, 0, sw / 2, 0, 2 * Math.PI);
+      if (p.type === 'circle' || p.type === 'pulley') {
+        const radiusPx = p.type === 'pulley' ? (getRotaryRadius(p) ?? p.w / 2) * camera.zoom : sw / 2;
+        ctx.arc(0, 0, radiusPx, 0, 2 * Math.PI);
       } else if (p.type === 'tri') {
         ctx.moveTo(-sw / 2, sh / 2);
         ctx.lineTo(sw / 2, sh / 2);
@@ -553,6 +565,63 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           ctx.textAlign = 'center';
           ctx.fillText(`z=${p.gear.teeth} m=${p.gear.module}`, 0, (radii.dedendum * 0.55) * camera.zoom);
         }
+      } else if (p.type === 'pulley') {
+        const rp = getRotaryRadius(p) ?? p.w / 2;
+        const rPx = rp * camera.zoom;
+        const grooveR = rPx * 0.85;
+        const webR = rPx * 0.76;
+        const hubR = Math.max(6, Math.min(15, rPx * 0.24));
+        const spokeCount = p.pulley?.spokes ?? 4;
+
+        // Sulco/canal interno da polia (anel duplo concêntrico)
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = isDark ? 'rgba(56, 189, 248, 0.72)' : 'rgba(2, 132, 199, 0.78)';
+        ctx.lineWidth = Math.max(1.2, 1.3 * camera.zoom);
+        ctx.beginPath();
+        ctx.arc(0, 0, grooveR, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Aro interno estrutural + raios giratórios que evidenciam o sentido de rotação
+        if (webR > hubR + 3) {
+          ctx.strokeStyle = isSelected
+            ? 'rgba(37, 99, 235, 0.55)'
+            : isDark
+            ? 'rgba(148, 163, 184, 0.45)'
+            : 'rgba(100, 116, 139, 0.45)';
+          ctx.lineWidth = Math.max(1.2, 1.5 * camera.zoom);
+          ctx.beginPath();
+          ctx.arc(0, 0, webR, 0, 2 * Math.PI);
+          ctx.stroke();
+
+          ctx.lineWidth = Math.max(1.8, 2.2 * camera.zoom);
+          ctx.beginPath();
+          for (let s = 0; s < spokeCount; s++) {
+            const ang = (s * 2 * Math.PI) / spokeCount;
+            ctx.moveTo(Math.cos(ang) * hubR, Math.sin(ang) * hubR);
+            ctx.lineTo(Math.cos(ang) * webR, Math.sin(ang) * webR);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        // Furo do cubo central
+        ctx.beginPath();
+        ctx.arc(0, 0, hubR, 0, 2 * Math.PI);
+        ctx.fillStyle = isDark ? '#0f172a' : '#f8fafc';
+        ctx.fill();
+        ctx.strokeStyle = isSelected ? '#2563eb' : (isDark ? '#475569' : '#94a3b8');
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Texto informativo no corpo da polia
+        if (rPx > 25) {
+          ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+          ctx.font = 'bold 9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`Ø${Math.round(rp * 2)} μ=${Math.round(getPartFriction(p) * 100)}%`, 0, rPx * 0.52);
+        }
       }
 
       // Cotas de Dimensão na peça selecionada
@@ -566,6 +635,13 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             `z=${p.gear.teeth} | Dp=${(radii.pitch * 2).toFixed(1)}mm | ${(p.rot * (180 / Math.PI)).toFixed(1)}°`,
             0,
             -radii.addendum * camera.zoom - 10
+          );
+        } else if (p.type === 'pulley') {
+          const rp = getRotaryRadius(p) ?? p.w / 2;
+          ctx.fillText(
+            `Ø=${(rp * 2).toFixed(1)}mm | μ=${Math.round(getPartFriction(p) * 100)}% | ${(p.rot * (180 / Math.PI)).toFixed(1)}°`,
+            0,
+            -rp * camera.zoom - 10
           );
         } else {
           ctx.fillText(
@@ -670,7 +746,11 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         ctx.stroke();
         ctx.restore();
 
-        if (hoveredPart && hoveredPart.type === 'gear' && hoveredPart.id !== pendingBeltGearId) {
+        if (
+          hoveredPart &&
+          (hoveredPart.type === 'gear' || hoveredPart.type === 'pulley') &&
+          hoveredPart.id !== pendingBeltGearId
+        ) {
           const previewGeom = calculateBeltGeometry(g1, hoveredPart);
           if (previewGeom) {
             ctx.save();
@@ -1012,6 +1092,114 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           ctx.restore();
         }
       }
+
+      // 5.2 Contatos por Atrito das Polias (Correias, Polias, Engrenagens e Peças Móveis)
+      const activePulleys = parts.filter((p) => !p.hidden && p.type === 'pulley');
+      const drawnFrictionPairs = new Set<string>();
+
+      const drawFrictionBadge = (worldContact: Point2D, tx: number, ty: number, label: string) => {
+        const sPt = worldToScreen(worldContact, camera, w, h);
+        ctx.save();
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sPt.x, sPt.y, 5.5, 0, 2 * Math.PI);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.45)';
+        ctx.beginPath();
+        ctx.arc(sPt.x, sPt.y, 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Linha tangente de contato por atrito
+        const tanLen = 14;
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(sPt.x - tx * tanLen, sPt.y - ty * tanLen);
+        ctx.lineTo(sPt.x + tx * tanLen, sPt.y + ty * tanLen);
+        ctx.stroke();
+
+        ctx.font = 'bold 9px monospace';
+        const bW = ctx.measureText(label).width + 8;
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+        ctx.beginPath();
+        ctx.roundRect(sPt.x - bW / 2, sPt.y + 8, bW, 14, 3);
+        ctx.fill();
+        ctx.fillStyle = '#fbbf24';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, sPt.x, sPt.y + 18);
+        ctx.restore();
+      };
+
+      for (const pulley of activePulleys) {
+        const rp = getRotaryRadius(pulley);
+        if (!rp) continue;
+
+        // Contato Polia <-> Correia (Tensionador / Rolo Guia)
+        for (const j of joints) {
+          if (j.type !== 'belt' || !j.part1Id || !j.part2Id) continue;
+          if (pulley.id === j.part1Id || pulley.id === j.part2Id) continue;
+          const g1 = parts.find((p) => p.id === j.part1Id);
+          const g2 = parts.find((p) => p.id === j.part2Id);
+          if (!g1 || !g2 || g1.hidden || g2.hidden) continue;
+          const geom = calculateBeltGeometry(g1, g2);
+          if (!geom) continue;
+          const closest = closestPointOnBelt({ x: pulley.x, y: pulley.y }, geom);
+          if (Math.abs(closest.dist - rp) <= 6) {
+            const dx = closest.point.x - pulley.x;
+            const dy = closest.point.y - pulley.y;
+            const len = Math.hypot(dx, dy) || 1;
+            drawFrictionBadge(
+              closest.point,
+              -dy / len,
+              dx / len,
+              `Atrito Correia (${Math.round(getPartFriction(pulley) * 100)}%)`
+            );
+          }
+        }
+
+        // Contato Polia <-> Outra Peça
+        for (const other of parts) {
+          if (other.id === pulley.id || other.hidden) continue;
+          const pairKey = `${Math.min(pulley.id, other.id)}-${Math.max(pulley.id, other.id)}`;
+          if (drawnFrictionPairs.has(pairKey)) continue;
+
+          const isWelded = joints.some(
+            (j) =>
+              j.type === 'weld' &&
+              ((j.part1Id === pulley.id && j.part2Id === other.id) ||
+                (j.part1Id === other.id && j.part2Id === pulley.id))
+          );
+          if (isWelded) continue;
+
+          if (other.type === 'pulley' || other.type === 'gear') {
+            const fc = calculateFrictionWheelContact(pulley, other, 6);
+            if (fc) {
+              drawnFrictionPairs.add(pairKey);
+              const dx = fc.contactPoint.x - pulley.x;
+              const dy = fc.contactPoint.y - pulley.y;
+              const len = Math.hypot(dx, dy) || 1;
+              const mu = Math.min(getPartFriction(pulley), getPartFriction(other));
+              drawFrictionBadge(fc.contactPoint, -dy / len, dx / len, `Atrito ${Math.round(mu * 100)}%`);
+            }
+          } else {
+            const contact = closestPointOnPartBoundary({ x: pulley.x, y: pulley.y }, other);
+            if (contact && Math.abs(contact.dist - rp) <= 6) {
+              drawnFrictionPairs.add(pairKey);
+              const dx = contact.point.x - pulley.x;
+              const dy = contact.point.y - pulley.y;
+              const len = Math.hypot(dx, dy) || 1;
+              drawFrictionBadge(
+                contact.point,
+                -dy / len,
+                dx / len,
+                `Atrito ${Math.round(getPartFriction(pulley) * 100)}%`
+              );
+            }
+          }
+        }
+      }
     }
 
     // 6. Eixos / Pivôs (Fixo, Motor, Slider, Rótulos de Identificação)
@@ -1263,11 +1451,20 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       return;
     }
 
-    // Ferramenta Correia Dentada (Timing Belt)
+    // Ferramenta 1-Clique: Inserir Polia
+    if (tool === 'pulley') {
+      recordSnapshot();
+      const snap = getSnapPoint(worldPt, parts, camera);
+      addPulleyPart(snap.point.x, snap.point.y, 80);
+      setTool('sel');
+      return;
+    }
+
+    // Ferramenta Correia (Timing / Atrito entre Engrenagens e/ou Polias)
     if (tool === 'belt') {
       const visibleParts = parts.filter((p) => !p.hidden);
       const clickedPart = hitPart(worldPt, visibleParts);
-      if (clickedPart && clickedPart.type === 'gear' && clickedPart.gear) {
+      if (clickedPart && getRotaryRadius(clickedPart) !== null) {
         if (!pendingBeltGearId) {
           setPendingBeltGearId(clickedPart.id);
         } else if (pendingBeltGearId !== clickedPart.id) {
@@ -1362,10 +1559,11 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
       } else if (clickedSlot && pendingJointPivot) {
         connectPinToSlot(pendingJointPivot, clickedSlot);
         setPendingJointPivot(null);
-      } else if (clickedPart && clickedPart.type === 'gear') {
+      } else if (clickedPart && (clickedPart.type === 'gear' || clickedPart.type === 'pulley')) {
         if (
           pendingJointPivot &&
           pendingJointPivot.part.type === 'gear' &&
+          clickedPart.type === 'gear' &&
           pendingJointPivot.part.id !== clickedPart.id
         ) {
           connectGears(pendingJointPivot.part, clickedPart);
@@ -1817,20 +2015,22 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
 
       const weldedPartnerIds = new Set(dragState.initialPartnerStates?.map((ps) => ps.id) ?? []);
 
-      // 1. Auto-snap concêntrico magnético para engrenagens no mesmo eixo (Solidárias)
-      if (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
-        const otherGears = parts.filter(
+      // 1. Auto-snap concêntrico magnético para engrenagens/polias no mesmo eixo (Solidárias)
+      if (
+        (dragState.targetPart.type === 'gear' && dragState.targetPart.gear) ||
+        dragState.targetPart.type === 'pulley'
+      ) {
+        const otherRotary = parts.filter(
           (op) =>
             op.id !== dragState.targetPart!.id &&
             !weldedPartnerIds.has(op.id) &&
-            op.type === 'gear' &&
-            op.gear &&
+            (op.type === 'gear' || op.type === 'pulley') &&
             !op.hidden
         );
 
         let snappedConcentric = false;
         if (weldedPartnerIds.size === 0) {
-          for (const og of otherGears) {
+          for (const og of otherRotary) {
             const distCenters = Math.hypot(newX - og.x, newY - og.y);
             if (distCenters < 14) {
               newX = og.x;
@@ -1841,8 +2041,9 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
           }
         }
 
-        // 2. Auto-snap magnético para engrenamento externo com alinhamento de fase de dentes
-        if (!snappedConcentric) {
+        // 2. Auto-snap magnético para engrenamento externo (engrenagens) ou encosto tangencial por atrito (polias)
+        if (!snappedConcentric && dragState.targetPart.type === 'gear' && dragState.targetPart.gear) {
+          const otherGears = otherRotary.filter((op) => op.type === 'gear' && op.gear);
           const clusterGears = [
             {
               part: dragState.targetPart,
@@ -1884,6 +2085,44 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
               }
             }
             if (meshedSnapFound) break;
+          }
+        } else if (!snappedConcentric && dragState.targetPart.type === 'pulley') {
+          const rp = getRotaryRadius(dragState.targetPart);
+          if (rp) {
+            let beltSnapped = false;
+            // Snap tangencial magnético ao encostar em Correias existentes
+            for (const j of joints) {
+              if (j.type !== 'belt' || !j.part1Id || !j.part2Id) continue;
+              if (j.part1Id === dragState.targetPart.id || j.part2Id === dragState.targetPart.id) continue;
+              const g1 = parts.find((p) => p.id === j.part1Id);
+              const g2 = parts.find((p) => p.id === j.part2Id);
+              if (!g1 || !g2 || g1.hidden || g2.hidden) continue;
+              const geom = calculateBeltGeometry(g1, g2);
+              if (!geom) continue;
+              const closest = closestPointOnBelt({ x: newX, y: newY }, geom);
+              if (Math.abs(closest.dist - rp) < 14 && closest.dist > 1e-3) {
+                const nx = (newX - closest.point.x) / closest.dist;
+                const ny = (newY - closest.point.y) / closest.dist;
+                newX = closest.point.x + nx * rp;
+                newY = closest.point.y + ny * rp;
+                beltSnapped = true;
+                break;
+              }
+            }
+
+            // Snap tangencial magnético contra polias, engrenagens, barras e retângulos
+            if (!beltSnapped) {
+              const testPulley: Part = { ...dragState.targetPart, x: newX, y: newY };
+              for (const other of parts) {
+                if (other.id === dragState.targetPart.id || other.hidden || weldedPartnerIds.has(other.id)) continue;
+                const idealPos = getIdealFrictionSnapPosition(other, testPulley);
+                if (idealPos && Math.hypot(newX - idealPos.x, newY - idealPos.y) < 14) {
+                  newX = idealPos.x;
+                  newY = idealPos.y;
+                  break;
+                }
+              }
+            }
           }
         }
       }
@@ -2021,8 +2260,8 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
         <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 bg-white/90 dark:bg-slate-800/90 backdrop-blur-md rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 text-xs text-slate-700 dark:text-slate-200 z-10 transition-all">
           <span className="font-semibold mr-1">{selectedPart.name}:</span>
 
-          {/* Ação de Engrenagem Solidária (Mesmo Eixo) */}
-          {selectedPart.type === 'gear' && (() => {
+          {/* Ação de Eixo Composto Solidário (Engrenagem / Polia no Mesmo Eixo) */}
+          {(selectedPart.type === 'gear' || selectedPart.type === 'pulley') && (() => {
             const weldJoint = joints.find(
               (j) => j.type === 'weld' && (j.part1Id === selectedPart.id || j.part2Id === selectedPart.id)
             );
@@ -2042,7 +2281,10 @@ export const CadCanvas: React.FC<CadCanvasProps> = ({ store }) => {
             }
 
             const concentric = parts.find(
-              (p) => p.id !== selectedPart.id && p.type === 'gear' && Math.hypot(p.x - selectedPart.x, p.y - selectedPart.y) <= 8
+              (p) =>
+                p.id !== selectedPart.id &&
+                (p.type === 'gear' || p.type === 'pulley') &&
+                Math.hypot(p.x - selectedPart.x, p.y - selectedPart.y) <= 8
             );
             if (concentric) {
               return (

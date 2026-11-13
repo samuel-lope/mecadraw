@@ -188,7 +188,7 @@ export const hitPart = (worldPt: Point2D, parts: Part[]): Part | null => {
     const [lx, ly] = rotate2D(worldPt.x - p.x, worldPt.y - p.y, -p.rot);
 
     let isInside = false;
-    if (p.type === 'circle' || p.type === 'gear') {
+    if (p.type === 'circle' || p.type === 'gear' || p.type === 'pulley') {
       isInside = Math.hypot(lx, ly) <= p.w / 2;
     } else if (p.type === 'tri') {
       const t = (ly + p.h / 2) / p.h;

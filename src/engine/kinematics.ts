@@ -8,6 +8,13 @@ import {
   TrailPoint,
 } from '../types/mechanism';
 import { distance2D, pivotWorldPos, rotate2D } from './geometry';
+import { calculateBeltGeometry, closestPointOnBelt } from './beltGeometry';
+import {
+  calculateFrictionWheelContact,
+  closestPointOnPartBoundary,
+  getPartFriction,
+  getRotaryRadius,
+} from './pulleyGeometry';
 
 export interface SimParticle {
   x: number;
@@ -46,8 +53,9 @@ export interface SimPinInSlot {
 export interface SimGear {
   part1Id: number;
   part2Id: number;
-  ratio: number; // z1 / z2
+  ratio: number; // z1 / z2 ou r1 / r2
   initialDiff: number; // diferenca angular de fase
+  friction?: number; // fator de aderência (1.0 padrão)
 }
 
 export interface SimWeld {
@@ -63,6 +71,7 @@ export interface SimBelt {
   part2Id: number;
   ratio: number;
   initialDiff: number;
+  friction?: number; // fator de aderência (1.0 padrão)
 }
 
 export interface SimulationInstance {
@@ -169,12 +178,15 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     } else if (j.type === 'gear' && j.part1Id && j.part2Id) {
       const g1 = parts.find((p) => p.id === j.part1Id);
       const g2 = parts.find((p) => p.id === j.part2Id);
-      if (g1?.gear && g2?.gear) {
+      const r1 = g1 ? getRotaryRadius(g1) : null;
+      const r2 = g2 ? getRotaryRadius(g2) : null;
+      if (g1 && g2 && r1 !== null && r2 !== null) {
         const key = [g1.id, g2.id].sort().join('-');
         pairedGears.add(key);
-        const ratio = g1.gear.teeth / g2.gear.teeth;
+        const ratio = r1 / r2;
+        const friction = Math.min(getPartFriction(g1), getPartFriction(g2));
         const initialDiff = g2.rot - (-ratio * g1.rot);
-        simGears.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
+        simGears.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff, friction });
       }
     } else if (j.type === 'weld' && j.part1Id && j.part2Id) {
       const p1 = parts.find((p) => p.id === j.part1Id);
@@ -196,18 +208,21 @@ export const createSimulation = (parts: Part[], joints: Joint[]): SimulationInst
     } else if (j.type === 'belt' && j.part1Id && j.part2Id) {
       const g1 = parts.find((p) => p.id === j.part1Id);
       const g2 = parts.find((p) => p.id === j.part2Id);
-      if (g1?.gear && g2?.gear) {
-        const ratio = g1.gear.teeth / g2.gear.teeth;
+      const r1 = g1 ? getRotaryRadius(g1) : null;
+      const r2 = g2 ? getRotaryRadius(g2) : null;
+      if (g1 && g2 && r1 !== null && r2 !== null) {
+        const ratio = r1 / r2;
+        const friction = Math.min(getPartFriction(g1), getPartFriction(g2));
         // Correia aberta síncrona: rotação no mesmo sentido
         const initialDiff = g2.rot - ratio * g1.rot;
-        simBelts.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff });
+        simBelts.push({ part1Id: g1.id, part2Id: g2.id, ratio, initialDiff, friction });
       }
     } else if (j.p2 !== undefined && particles[j.p1] && particles[j.p2]) {
       simJoints.push([j.p1, j.p2]);
     }
   }
 
-  // 5. Engrenagens geometricamente acopladas por proximidade
+  // 5. Engrenagens geometricamente acopladas por proximidade (contatos dinâmicos de Polia são resolvidos quadro a quadro)
   const gearParts = parts.filter((p) => p.type === 'gear' && p.gear);
   for (let i = 0; i < gearParts.length; i++) {
     for (let k = i + 1; k < gearParts.length; k++) {
@@ -281,6 +296,12 @@ export const stepSimulation = (
   defaultTrailDuration = 3.0
 ): void => {
   sim.time += dt;
+
+  // Registra o estado anterior do frame para resolução de contatos dinâmicos por atrito
+  const prevPartState = new Map<number, { x: number; y: number; rot: number }>();
+  for (const p of parts) {
+    prevPartState.set(p.id, { x: p.x, y: p.y, rot: p.rot });
+  }
 
   // 1. Atualizar partículas acionadas por motor com integração incremental suave
   for (const motor of sim.motors) {
@@ -486,6 +507,9 @@ export const stepSimulation = (
       const p2 = parts.find((p) => p.id === g.part2Id);
       if (!p1 || !p2) continue;
 
+      const mu = Math.min(getPartFriction(p1), getPartFriction(p2));
+      if (mu < 0.999) continue; // Escorregamento resolvido incrementalmente após o passo GS
+
       // Sincroniza orientação angular se a engrenagem tiver múltiplos pivôs
       if (p1.pivots.length >= 2) {
         p1.rot = computePartPose(p1, sim.particles).rot;
@@ -498,7 +522,7 @@ export const stepSimulation = (
       let rotErr = p2.rot - desiredRot2;
       rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
 
-      const equivLinearErr = Math.abs(rotErr) * ((p2.gear?.module || 4) * (p2.gear?.teeth || 20) * 0.5);
+      const equivLinearErr = Math.abs(rotErr) * (getRotaryRadius(p2) ?? 40);
       maxResidual = Math.max(maxResidual, equivLinearErr);
 
       const p1Motor = p1.pivots.some((pv) => pv.motor);
@@ -576,12 +600,15 @@ export const stepSimulation = (
       }
     }
 
-    // G. Restrições de Transmissão por Correia Dentada (Belts)
+    // G. Restrições de Transmissão por Correia (Belts)
     if (sim.belts) {
       for (const b of sim.belts) {
         const p1 = parts.find((p) => p.id === b.part1Id);
         const p2 = parts.find((p) => p.id === b.part2Id);
         if (!p1 || !p2) continue;
+
+        const mu = Math.min(getPartFriction(p1), getPartFriction(p2));
+        if (mu < 0.999) continue; // Escorregamento resolvido incrementalmente após o passo GS
 
         if (p1.pivots.length >= 2) {
           p1.rot = computePartPose(p1, sim.particles).rot;
@@ -595,7 +622,7 @@ export const stepSimulation = (
         let rotErr = p2.rot - desiredRot2;
         rotErr = Math.atan2(Math.sin(rotErr), Math.cos(rotErr));
 
-        const equivLinearErr = Math.abs(rotErr) * ((p2.gear?.module || 4) * (p2.gear?.teeth || 20) * 0.5);
+        const equivLinearErr = Math.abs(rotErr) * (getRotaryRadius(p2) ?? 40);
         maxResidual = Math.max(maxResidual, equivLinearErr);
 
         const p1Motor = p1.pivots.some((pv) => pv.motor);
@@ -634,7 +661,7 @@ export const stepSimulation = (
   for (const part of parts) {
     if (part.pivots.length === 0) continue;
 
-    if (part.type === 'gear') {
+    if (part.type === 'gear' || part.type === 'pulley') {
       const p = part.pivots[0];
       const simP = sim.particles[p.id];
       if (simP) {
@@ -699,6 +726,353 @@ export const stepSimulation = (
       part.rot = rot;
       part.x = cSim.x - rcx;
       part.y = cSim.y - rcy;
+    }
+  }
+
+  // 3.5. Contatos Dinâmicos por Atrito (Polias, Correias e Peças Móveis) + Escorregamento
+  {
+    const angleDiff = (a: number, b: number) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+    const syncPartPivots = (p: Part) => {
+      if (p.pivots.length > 1) {
+        p.pivots.forEach((pv) => {
+          const sp = sim.particles[pv.id];
+          if (sp && !sp.fixed) {
+            const [rx, ry] = rotate2D(pv.lx, pv.ly, p.rot);
+            sp.x = p.x + rx;
+            sp.y = p.y + ry;
+          }
+        });
+      }
+    };
+
+    const staticPaired = new Set<string>();
+    for (const g of sim.gears) {
+      staticPaired.add([g.part1Id, g.part2Id].sort().join('-'));
+    }
+    for (const w of sim.welds) {
+      staticPaired.add([w.part1Id, w.part2Id].sort().join('-'));
+    }
+
+    const appliedDelta = new Map<string, number>();
+
+    for (let pass = 0; pass < 4; pass++) {
+      // A. Escorregamento e propagação em Correias (sim.belts)
+      for (const b of sim.belts) {
+        const p1 = parts.find((p) => p.id === b.part1Id);
+        const p2 = parts.find((p) => p.id === b.part2Id);
+        if (!p1 || !p2) continue;
+        const prev1 = prevPartState.get(p1.id);
+        const prev2 = prevPartState.get(p2.id);
+        if (!prev1 || !prev2) continue;
+
+        const mu = Math.min(getPartFriction(p1), getPartFriction(p2));
+        const dRot1 = angleDiff(p1.rot, prev1.rot);
+        const dRot2 = angleDiff(p2.rot, prev2.rot);
+        const p1Motor = p1.pivots.some((pv) => pv.motor);
+        const p2Motor = p2.pivots.some((pv) => pv.motor);
+
+        if (p1Motor && !p2Motor) {
+          const desired = mu * b.ratio * dRot1;
+          const inc = desired - dRot2;
+          if (Math.abs(inc) > 1e-8) {
+            p2.rot += inc;
+            syncPartPivots(p2);
+          }
+        } else if (p2Motor && !p1Motor) {
+          const desired = mu * (dRot2 / b.ratio);
+          const inc = desired - dRot1;
+          if (Math.abs(inc) > 1e-8) {
+            p1.rot += inc;
+            syncPartPivots(p1);
+          }
+        } else if (!p1Motor && !p2Motor) {
+          if (Math.abs(dRot1) >= Math.abs(dRot2) && Math.abs(dRot1) > 1e-8) {
+            const desired = mu * b.ratio * dRot1;
+            const inc = desired - dRot2;
+            if (Math.abs(inc) > 1e-8) {
+              p2.rot += inc;
+              syncPartPivots(p2);
+            }
+          } else if (Math.abs(dRot2) > Math.abs(dRot1) && Math.abs(dRot2) > 1e-8) {
+            const desired = mu * (dRot2 / b.ratio);
+            const inc = desired - dRot1;
+            if (Math.abs(inc) > 1e-8) {
+              p1.rot += inc;
+              syncPartPivots(p1);
+            }
+          }
+        }
+      }
+
+      // B. Escorregamento e propagação em Pares Explícitos (sim.gears)
+      for (const g of sim.gears) {
+        const p1 = parts.find((p) => p.id === g.part1Id);
+        const p2 = parts.find((p) => p.id === g.part2Id);
+        if (!p1 || !p2) continue;
+        const prev1 = prevPartState.get(p1.id);
+        const prev2 = prevPartState.get(p2.id);
+        if (!prev1 || !prev2) continue;
+
+        const mu = Math.min(getPartFriction(p1), getPartFriction(p2));
+        const dRot1 = angleDiff(p1.rot, prev1.rot);
+        const dRot2 = angleDiff(p2.rot, prev2.rot);
+        const p1Motor = p1.pivots.some((pv) => pv.motor);
+        const p2Motor = p2.pivots.some((pv) => pv.motor);
+
+        if (p1Motor && !p2Motor) {
+          const desired = -mu * g.ratio * dRot1;
+          const inc = desired - dRot2;
+          if (Math.abs(inc) > 1e-8) {
+            p2.rot += inc;
+            syncPartPivots(p2);
+          }
+        } else if (p2Motor && !p1Motor) {
+          const desired = -mu * (dRot2 / g.ratio);
+          const inc = desired - dRot1;
+          if (Math.abs(inc) > 1e-8) {
+            p1.rot += inc;
+            syncPartPivots(p1);
+          }
+        } else if (!p1Motor && !p2Motor) {
+          if (Math.abs(dRot1) >= Math.abs(dRot2) && Math.abs(dRot1) > 1e-8) {
+            const desired = -mu * g.ratio * dRot1;
+            const inc = desired - dRot2;
+            if (Math.abs(inc) > 1e-8) {
+              p2.rot += inc;
+              syncPartPivots(p2);
+            }
+          } else if (Math.abs(dRot2) > Math.abs(dRot1) && Math.abs(dRot2) > 1e-8) {
+            const desired = -mu * (dRot2 / g.ratio);
+            const inc = desired - dRot1;
+            if (Math.abs(inc) > 1e-8) {
+              p1.rot += inc;
+              syncPartPivots(p1);
+            }
+          }
+        }
+      }
+
+      // C. Propagação em Eixos Solidários / Coaxiais (sim.welds)
+      for (const w of sim.welds) {
+        const p1 = parts.find((p) => p.id === w.part1Id);
+        const p2 = parts.find((p) => p.id === w.part2Id);
+        if (!p1 || !p2) continue;
+        const prev1 = prevPartState.get(p1.id);
+        const prev2 = prevPartState.get(p2.id);
+        if (!prev1 || !prev2) continue;
+
+        const dRot1 = angleDiff(p1.rot, prev1.rot);
+        const dRot2 = angleDiff(p2.rot, prev2.rot);
+        const p1Motor = p1.pivots.some((pv) => pv.motor);
+        const p2Motor = p2.pivots.some((pv) => pv.motor);
+
+        if (!p2Motor && (p1Motor || Math.abs(dRot1) > Math.abs(dRot2))) {
+          const inc = dRot1 - dRot2;
+          if (Math.abs(inc) > 1e-8) {
+            p2.rot += inc;
+            syncPartPivots(p2);
+          }
+        } else if (!p1Motor && (p2Motor || Math.abs(dRot2) > Math.abs(dRot1))) {
+          const inc = dRot2 - dRot1;
+          if (Math.abs(inc) > 1e-8) {
+            p1.rot += inc;
+            syncPartPivots(p1);
+          }
+        }
+      }
+
+      // D. Polia encostada em Correia em movimento (Idler / Rolo Tensionador por atrito)
+      for (const b of sim.belts) {
+        const g1 = parts.find((p) => p.id === b.part1Id);
+        const g2 = parts.find((p) => p.id === b.part2Id);
+        if (!g1 || !g2 || g1.hidden || g2.hidden) continue;
+
+        const geom = calculateBeltGeometry(g1, g2);
+        if (!geom) continue;
+
+        const prev1 = prevPartState.get(g1.id);
+        const prev2 = prevPartState.get(g2.id);
+        if (!prev1 || !prev2) continue;
+
+        const ds1 = angleDiff(g1.rot, prev1.rot) * geom.r1;
+        const ds2 = angleDiff(g2.rot, prev2.rot) * geom.r2;
+        const beltDs = Math.abs(ds1) >= Math.abs(ds2) ? ds1 : ds2;
+        if (Math.abs(beltDs) <= 1e-8) continue;
+
+        for (const pulley of parts) {
+          if (
+            pulley.type !== 'pulley' ||
+            pulley.hidden ||
+            pulley.id === g1.id ||
+            pulley.id === g2.id ||
+            pulley.pivots.some((pv) => pv.motor)
+          ) {
+            continue;
+          }
+
+          const rp = getRotaryRadius(pulley);
+          if (!rp) continue;
+
+          const closest = closestPointOnBelt({ x: pulley.x, y: pulley.y }, geom);
+          if (Math.abs(closest.dist - rp) > 6) continue;
+
+          const q = closest.point;
+          const dx = q.x - pulley.x;
+          const dy = q.y - pulley.y;
+          const cpDist = Math.hypot(dx, dy);
+          if (cpDist < 1e-4) continue;
+
+          const nx = dx / cpDist;
+          const ny = dy / cpDist;
+          const tx = -ny;
+          const ty = nx;
+
+          const bvx = beltDs * closest.clockwiseTangent.x;
+          const bvy = beltDs * closest.clockwiseTangent.y;
+          const prevP = prevPartState.get(pulley.id);
+          const dXP = prevP ? pulley.x - prevP.x : 0;
+          const dYP = prevP ? pulley.y - prevP.y : 0;
+
+          const dsTan = (bvx - dXP) * tx + (bvy - dYP) * ty;
+          const mu = getPartFriction(pulley);
+          const desiredTotal = mu * (dsTan / rp);
+
+          const edgeKey = `belt-idler:${g1.id}-${g2.id}->${pulley.id}`;
+          const prevApp = appliedDelta.get(edgeKey) || 0;
+          const inc = desiredTotal - prevApp;
+          if (Math.abs(inc) > 1e-8) {
+            pulley.rot += inc;
+            appliedDelta.set(edgeKey, desiredTotal);
+            syncPartPivots(pulley);
+          }
+        }
+      }
+
+      // E. Polia em contato tangencial direto com outras Peças Móveis (Polias, Engrenagens, Barras, Retângulos, Círculos, Triângulos)
+      for (const pulley of parts) {
+        if (pulley.type !== 'pulley' || pulley.hidden) continue;
+        const rp = getRotaryRadius(pulley);
+        if (!rp) continue;
+        const prevP = prevPartState.get(pulley.id);
+        if (!prevP) continue;
+        const pulleyIsMotor = pulley.pivots.some((pv) => pv.motor);
+
+        for (const other of parts) {
+          if (other.id === pulley.id || other.hidden) continue;
+          if (staticPaired.has([pulley.id, other.id].sort().join('-'))) continue;
+
+          const contact = closestPointOnPartBoundary({ x: pulley.x, y: pulley.y }, other);
+          if (!contact || Math.abs(contact.dist - rp) > 6) continue;
+
+          const q = contact.point;
+          const dx = q.x - pulley.x;
+          const dy = q.y - pulley.y;
+          const cpDist = Math.hypot(dx, dy);
+          if (cpDist < 1e-4) continue;
+
+          const nx = dx / cpDist;
+          const ny = dy / cpDist;
+          const tx = -ny;
+          const ty = nx;
+
+          const mu = Math.min(getPartFriction(pulley), getPartFriction(other));
+          const prevO = prevPartState.get(other.id);
+          if (!prevO) continue;
+
+          // E.1: Movimento de `other` gira `pulley`
+          const otherToPulleyKey = `part-to-pulley:${other.id}->${pulley.id}`;
+          if (!pulleyIsMotor) {
+            const dXO = other.x - prevO.x;
+            const dYO = other.y - prevO.y;
+            const dRotO = angleDiff(other.rot, prevO.rot);
+            const rxO = q.x - other.x;
+            const ryO = q.y - other.y;
+
+            const vxO = dXO - ryO * dRotO;
+            const vyO = dYO + rxO * dRotO;
+            const dXP = pulley.x - prevP.x;
+            const dYP = pulley.y - prevP.y;
+
+            const dsTan = (vxO - dXP) * tx + (vyO - dYP) * ty;
+            const desiredTotal = mu * (dsTan / rp);
+
+            // Evita retroalimentação se `other` foi movida por `pulley` neste mesmo frame
+            const pulleyToOtherApp = appliedDelta.get(`pulley-to-gear:${pulley.id}->${other.id}`) || 0;
+            if (Math.abs(pulleyToOtherApp) <= 1e-9) {
+              const prevApp = appliedDelta.get(otherToPulleyKey) || 0;
+              const inc = desiredTotal - prevApp;
+              if (Math.abs(inc) > 1e-8) {
+                pulley.rot += inc;
+                appliedDelta.set(otherToPulleyKey, desiredTotal);
+                syncPartPivots(pulley);
+              }
+            }
+          }
+
+          // E.2: `pulley` (acionada por motor/correia/outra peça) movimenta `other`
+          const otherIsMotor = other.pivots.some((pv) => pv.motor);
+          if (!otherIsMotor && other.type !== 'pulley') {
+            const totalDRotP = angleDiff(pulley.rot, prevP.rot);
+            const drivenByThisOther = appliedDelta.get(otherToPulleyKey) || 0;
+            const netDriverRotP = totalDRotP - drivenByThisOther;
+
+            if (Math.abs(netDriverRotP) > 1e-8) {
+              if (other.type === 'gear') {
+                const rO = getRotaryRadius(other);
+                if (rO) {
+                  const rxO = q.x - other.x;
+                  const ryO = q.y - other.y;
+                  const oDist = Math.hypot(rxO, ryO) || rO;
+                  const oTx = -ryO / oDist;
+                  const oTy = rxO / oDist;
+
+                  const dsP = netDriverRotP * rp;
+                  const desiredRotO = mu * (dsP * (tx * oTx + ty * oTy)) / rO;
+                  const edgeKey = `pulley-to-gear:${pulley.id}->${other.id}`;
+                  const prevApp = appliedDelta.get(edgeKey) || 0;
+                  const inc = desiredRotO - prevApp;
+                  if (Math.abs(inc) > 1e-8) {
+                    other.rot += inc;
+                    appliedDelta.set(edgeKey, desiredRotO);
+                    syncPartPivots(other);
+                  }
+                }
+              } else {
+                const mobilePivots = other.pivots.filter((pv) => {
+                  const sp = sim.particles[pv.id];
+                  return sp && !sp.fixed;
+                });
+                if (mobilePivots.length > 0 && pulleyIsMotor) {
+                  const dsP = mu * netDriverRotP * rp;
+                  const edgeKey = `pulley-push:${pulley.id}->${other.id}`;
+                  const prevApp = appliedDelta.get(edgeKey) || 0;
+                  const inc = dsP - prevApp;
+                  if (Math.abs(inc) > 1e-6) {
+                    const pushX = inc * tx;
+                    const pushY = inc * ty;
+                    for (const pv of mobilePivots) {
+                      const sp = sim.particles[pv.id];
+                      if (sp.slider) {
+                        const proj = pushX * sp.slider.dir.x + pushY * sp.slider.dir.y;
+                        sp.x += proj * sp.slider.dir.x;
+                        sp.y += proj * sp.slider.dir.y;
+                      } else {
+                        sp.x += pushX;
+                        sp.y += pushY;
+                      }
+                    }
+                    const newPose = computePartPose(other, sim.particles);
+                    other.x = newPose.x;
+                    other.y = newPose.y;
+                    other.rot = newPose.rot;
+                    appliedDelta.set(edgeKey, dsP);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -825,6 +1199,34 @@ export const analyzeMechanism = (parts: Part[], joints: Joint[]): MechanismAnaly
       const rp2 = ((g2.gear!.module) * g2.gear!.teeth) / 2;
       if (Math.abs(d - (rp1 + rp2)) <= Math.max(10, g1.gear!.module * 1.8)) {
         pairedGears.add(key);
+      }
+    }
+  }
+  const rotaryParts = parts.filter((p) => getRotaryRadius(p) !== null && !p.hidden);
+  for (let i = 0; i < rotaryParts.length; i++) {
+    for (let k = i + 1; k < rotaryParts.length; k++) {
+      const p1 = rotaryParts[i];
+      const p2 = rotaryParts[k];
+      const key = [p1.id, p2.id].sort().join('-');
+      if (pairedGears.has(key)) continue;
+      if (calculateFrictionWheelContact(p1, p2, 6)) {
+        pairedGears.add(key);
+      }
+    }
+  }
+  const pulleyParts = parts.filter((p) => p.type === 'pulley' && !p.hidden);
+  for (const j of joints) {
+    if (j.type !== 'belt' || !j.part1Id || !j.part2Id) continue;
+    const g1 = parts.find((p) => p.id === j.part1Id);
+    const g2 = parts.find((p) => p.id === j.part2Id);
+    if (!g1 || !g2) continue;
+    const geom = calculateBeltGeometry(g1, g2);
+    if (!geom) continue;
+    for (const pl of pulleyParts) {
+      if (pl.id === g1.id || pl.id === g2.id) continue;
+      const rp = getRotaryRadius(pl);
+      if (rp && Math.abs(closestPointOnBelt({ x: pl.x, y: pl.y }, geom).dist - rp) <= 6) {
+        pairedGears.add(`belt-idler:${j.id}-${pl.id}`);
       }
     }
   }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { analyzeMechanism, createSimulation, stepSimulation, stepPausedTrails } from './kinematics';
 import { createBar, PRESETS } from './presets';
 import { pivotWorldPos } from './geometry';
-import { Joint, Part, TrailPoint } from '../types/mechanism';
+import { Joint, Part, TelemetrySample, TrailPoint } from '../types/mechanism';
 
 describe('Kinematics Engine', () => {
   it('correctly calculates DOF and Grashof for a four-bar linkage', () => {
@@ -432,5 +432,208 @@ describe('Kinematics Engine', () => {
     expect(analysisFixed.joints1).toBe(2);
     expect(analysisFixed.joints2).toBe(1);
     expect(analysisFixed.dof).toBe(1);
+  });
+
+  it('transmite movimento entre Polias conectadas por Correia no mesmo sentido e razão D1/D2', () => {
+    const p1: Part = {
+      id: 1,
+      name: 'Polia 1',
+      type: 'pulley',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      pulley: { diameter: 80, friction: 1 },
+      pivots: [{ id: 10, lx: 0, ly: 0, fixed: true, motor: true, motorDir: 1 }],
+    };
+    const p2: Part = {
+      id: 2,
+      name: 'Polia 2',
+      type: 'pulley',
+      x: 200,
+      y: 0,
+      rot: 0,
+      w: 40,
+      h: 40,
+      pulley: { diameter: 40, friction: 1 },
+      pivots: [{ id: 20, lx: 0, ly: 0, fixed: true }],
+    };
+    const belt: Joint = { id: 100, p1: 10, p2: 20, part1Id: 1, part2Id: 2, type: 'belt', gearRatio: 2 };
+
+    const parts = [p1, p2];
+    const sim = createSimulation(parts, [belt]);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry: Record<number, TelemetrySample[]> = {};
+
+    stepSimulation(sim, parts, 0.1, 60, 1, trails, telemetry);
+
+    const expected1 = ((60 * 2 * Math.PI) / 60) * 0.1;
+    expect(p1.rot).toBeCloseTo(expected1, 4);
+    // p2 tem metade do diâmetro -> gira o dobro no mesmo sentido
+    expect(p2.rot).toBeCloseTo(expected1 * 2, 3);
+  });
+
+  it('transmite movimento por atrito ao encostar duas Polias tangencialmente (e respeita escorregamento)', () => {
+    const p1: Part = {
+      id: 1,
+      name: 'Polia Motora',
+      type: 'pulley',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      pulley: { diameter: 80, friction: 1 },
+      pivots: [{ id: 10, lx: 0, ly: 0, fixed: true, motor: true, motorDir: 1 }],
+    };
+    const p2Full: Part = {
+      id: 2,
+      name: 'Polia Movida',
+      type: 'pulley',
+      x: 70, // r1(40) + r2(30) = 70 -> contato tangencial exato
+      y: 0,
+      rot: 0,
+      w: 60,
+      h: 60,
+      pulley: { diameter: 60, friction: 1 },
+      pivots: [{ id: 20, lx: 0, ly: 0, fixed: true }],
+    };
+    const p3Half: Part = {
+      id: 3,
+      name: 'Polia 50%',
+      type: 'pulley',
+      x: -70, // contato do outro lado da polia motora
+      y: 0,
+      rot: 0,
+      w: 60,
+      h: 60,
+      pulley: { diameter: 60, friction: 0.5 },
+      pivots: [{ id: 30, lx: 0, ly: 0, fixed: true }],
+    };
+
+    const parts = [p1, p2Full, p3Half];
+    const sim = createSimulation(parts, []);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry: Record<number, TelemetrySample[]> = {};
+
+    stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry);
+
+    const expected1 = ((60 * 2 * Math.PI) / 60) * 0.05;
+    const ratio = 40 / 30;
+    expect(p1.rot).toBeCloseTo(expected1, 4);
+    expect(p2Full.rot).toBeCloseTo(-expected1 * ratio, 3);
+    expect(p3Half.rot).toBeCloseTo(-expected1 * ratio * 0.5, 3);
+  });
+
+  it('gira Polia externa por atrito quando encostada em uma Correia em movimento', () => {
+    const p1: Part = {
+      id: 1,
+      name: 'Polia 1',
+      type: 'pulley',
+      x: 0,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      pulley: { diameter: 80, friction: 1 },
+      pivots: [{ id: 10, lx: 0, ly: 0, fixed: true, motor: true, motorDir: 1 }],
+    };
+    const p2: Part = {
+      id: 2,
+      name: 'Polia 2',
+      type: 'pulley',
+      x: 200,
+      y: 0,
+      rot: 0,
+      w: 80,
+      h: 80,
+      pulley: { diameter: 80, friction: 1 },
+      pivots: [{ id: 20, lx: 0, ly: 0, fixed: true }],
+    };
+    // Polia tensionadora encostada no lado externo do ramo superior (y = -40), r3 = 20 -> centro em (100, -60)
+    const idler: Part = {
+      id: 3,
+      name: 'Polia Tensionadora',
+      type: 'pulley',
+      x: 100,
+      y: -60,
+      rot: 0,
+      w: 40,
+      h: 40,
+      pulley: { diameter: 40, friction: 1 },
+      pivots: [{ id: 30, lx: 0, ly: 0, fixed: true }],
+    };
+    const belt: Joint = { id: 100, p1: 10, p2: 20, part1Id: 1, part2Id: 2, type: 'belt', gearRatio: 1 };
+
+    const parts = [p1, p2, idler];
+    const sim = createSimulation(parts, [belt]);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry: Record<number, TelemetrySample[]> = {};
+
+    stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry);
+
+    const expected1 = ((60 * 2 * Math.PI) / 60) * 0.05;
+    // Ramo superior move para a direita (+x); polia encostada por cima tem borda inferior movendo para +x -> sentido anti-horário (negativo) e dobro da rotação (r1/r3 = 40/20 = 2)
+    expect(idler.rot).toBeCloseTo(-expected1 * 2, 3);
+  });
+
+  it('gira Polia por atrito ao encostar em Barra móvel em translação', () => {
+    // Manivela motorizada em (-100, 0) girando a pino em (-100, -20) (posição topo -> movimento para +x)
+    const crank: Part = {
+      id: 1,
+      name: 'Manivela',
+      type: 'bar',
+      x: -100,
+      y: -10,
+      rot: -Math.PI / 2,
+      w: 32,
+      h: 12,
+      pivots: [
+        { id: 10, lx: -10, ly: 0, fixed: true, motor: true, motorDir: 1 },
+        { id: 11, lx: 10, ly: 0 },
+      ],
+    };
+    const sliderBar: Part = {
+      id: 2,
+      name: 'Barra Deslizante',
+      type: 'bar',
+      x: -30,
+      y: -20,
+      rot: 0,
+      w: 140,
+      h: 20, // borda superior em y = -30
+      pivots: [
+        { id: 20, lx: -70, ly: 0 }, // conectado ao pino da manivela
+        { id: 21, lx: 70, ly: 0, slider: { enabled: true, angle: 0, length: 120 } },
+      ],
+    };
+    const pulley: Part = {
+      id: 3,
+      name: 'Polia Apoiada',
+      type: 'pulley',
+      x: 0,
+      y: -60, // r=30 -> borda inferior em y = -30 encostando na borda superior da barra
+      rot: 0,
+      w: 60,
+      h: 60,
+      pulley: { diameter: 60, friction: 1 },
+      pivots: [{ id: 30, lx: 0, ly: 0, fixed: true }],
+    };
+
+    const joints: Joint[] = [{ id: 100, p1: 11, p2: 20 }];
+    const parts = [crank, sliderBar, pulley];
+    const sim = createSimulation(parts, joints);
+    const trails: Record<number, TrailPoint[]> = {};
+    const telemetry: Record<number, TelemetrySample[]> = {};
+
+    const prevX = sliderBar.x;
+    stepSimulation(sim, parts, 0.05, 60, 1, trails, telemetry);
+    const dx = sliderBar.x - prevX;
+
+    // A barra moveu para +x; polia apoiada em cima gira no sentido anti-horário (~ -dx / r)
+    expect(dx).toBeGreaterThan(1);
+    expect(pulley.rot).toBeLessThan(0);
+    expect(pulley.rot).toBeCloseTo(-dx / 30, 2);
   });
 });

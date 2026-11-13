@@ -3,6 +3,7 @@ import { MechanismStore } from '../state/useMechanismStore';
 import { Trash2, Copy, Link, Unlink, Plus, Eye, EyeOff, Palette, RotateCcw } from 'lucide-react';
 import { calculateGearRadii } from '../engine/gearGeometry';
 import { calculateBeltGeometry } from '../engine/beltGeometry';
+import { getPartFriction, getRotaryRadius } from '../engine/pulleyGeometry';
 import { ElementStyle, StrokeLineStyle } from '../types/mechanism';
 
 const PRESET_COLORS = [
@@ -187,6 +188,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
     deleteSlot,
     connectPinToSlot,
     updateGear,
+    updatePulley,
     connectGears,
     connectBelt,
     lockCoaxialGears,
@@ -248,10 +250,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             label: `Engrenar com Peça ${p.letter || 'A'} (${p.gear.teeth}D)`,
             part: p,
           });
+        }
+        if (getRotaryRadius(selPart) !== null && getRotaryRadius(p) !== null) {
+          const pDesc = p.gear ? `${p.gear.teeth}D` : `Ø${Math.round((getRotaryRadius(p) ?? 40) * 2)}mm`;
           otherTargets.push({
             type: 'belt',
             id: `belt:${p.id}`,
-            label: `Correia Dentada c/ Peça ${p.letter || 'A'} (${p.gear.teeth}D)`,
+            label: `Correia c/ Peça ${p.letter || 'A'} (${pDesc})`,
             part: p,
           });
           otherTargets.push({
@@ -298,9 +303,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
           if (j.type === 'belt') {
             const partnerPartId = (selPart && j.part1Id === selPart.id) ? j.part2Id : j.part1Id;
             const partnerPart = parts.find((p) => p.id === partnerPartId);
+            const partnerDesc = partnerPart?.gear
+              ? `${partnerPart.gear.teeth}D`
+              : `Ø${Math.round((partnerPart ? getRotaryRadius(partnerPart) ?? 40 : 40) * 2)}mm`;
             return {
               joint: j,
-              partnerInfo: `Correia Dentada c/ Peça ${partnerPart?.letter || 'B'} (${partnerPart?.gear?.teeth || 20}D)`,
+              partnerInfo: `Correia c/ Peça ${partnerPart?.letter || 'B'} (${partnerDesc})`,
               isSlot: false,
             };
           }
@@ -358,15 +366,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             <div className="flex flex-col gap-3">
               <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700/60 flex flex-col gap-2">
                 <span className="font-semibold text-slate-800 dark:text-slate-200 text-[11px] uppercase tracking-wider">
-                  Polias Conectadas
+                  Elementos Conectados
                 </span>
                 <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
-                  <span>Polia 1 ({p1.letter || 'A'}):</span>
-                  <span className="font-mono font-medium">{p1.gear?.teeth} dentes (m={p1.gear?.module})</span>
+                  <span>Elemento 1 ({p1.letter || 'A'}):</span>
+                  <span className="font-mono font-medium">
+                    {p1.gear ? `${p1.gear.teeth} dentes (m=${p1.gear.module})` : `Polia Ø${Math.round(geom.r1 * 2)}mm`}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
-                  <span>Polia 2 ({p2.letter || 'B'}):</span>
-                  <span className="font-mono font-medium">{p2.gear?.teeth} dentes (m={p2.gear?.module})</span>
+                  <span>Elemento 2 ({p2.letter || 'B'}):</span>
+                  <span className="font-mono font-medium">
+                    {p2.gear ? `${p2.gear.teeth} dentes (m=${p2.gear.module})` : `Polia Ø${Math.round(geom.r2 * 2)}mm`}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-slate-700 dark:text-slate-300 pt-1 border-t border-slate-200 dark:border-slate-700">
                   <span>Relação de Transmissão:</span>
@@ -384,14 +396,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                   <span>Comprimento Total (L):</span>
                   <span className="font-mono font-bold text-slate-800 dark:text-slate-100">{geom.totalLength.toFixed(1)} mm</span>
                 </div>
-                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
-                  <span>Quantidade de Dentes:</span>
-                  <span className="font-mono font-medium">{geom.teethCount} dentes</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
-                  <span>Passo Circular (p = π·m):</span>
-                  <span className="font-mono font-medium">{geom.pitch.toFixed(2)} mm</span>
-                </div>
+                {geom.hasTeeth && (
+                  <>
+                    <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                      <span>Quantidade de Dentes:</span>
+                      <span className="font-mono font-medium">{geom.teethCount} dentes</span>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
+                      <span>Passo Circular (p = π·m):</span>
+                      <span className="font-mono font-medium">{geom.pitch.toFixed(2)} mm</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between items-center text-slate-700 dark:text-slate-300">
                   <span>Distância entre Centros (d):</span>
                   <span className="font-mono font-medium">{geom.d.toFixed(1)} mm</span>
@@ -403,7 +419,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
               </div>
 
               <div className="p-2.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 rounded text-[11px] text-blue-700 dark:text-blue-300">
-                A correia dentada transmite rotação no mesmo sentido. Arrastar qualquer uma das engrenagens ajusta dinamicamente o comprimento e a quantidade de dentes.
+                A correia transmite rotação no mesmo sentido. Encostar polias externas nos vãos da correia também transmite rotação por atrito.
               </div>
 
               <AppearanceSection
@@ -524,7 +540,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
       {/* Dimensões Geométricas */}
       <div className="flex flex-col gap-2 border-t border-slate-100 dark:border-slate-800 pt-3">
         <h4 className="font-semibold text-slate-900 dark:text-slate-100 text-[11px] uppercase tracking-wider">
-          {selPart.type === 'gear' ? 'Geometria da Engrenagem' : 'Geometria da Peça'}
+          {selPart.type === 'gear'
+            ? 'Geometria da Engrenagem'
+            : selPart.type === 'pulley'
+            ? 'Geometria da Polia'
+            : 'Geometria da Peça'}
         </h4>
 
         {selPart.type === 'gear' && selPart.gear ? (
@@ -637,16 +657,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
                 );
               }
 
-              // Se não estiver travada, verificar se há engrenagem concêntrica próxima
+              // Se não estiver travada, verificar se há engrenagem ou polia concêntrica próxima
               const concentric = parts.find(
-                (p) => p.id !== selPart.id && p.type === 'gear' && Math.hypot(p.x - selPart.x, p.y - selPart.y) <= 8
+                (p) =>
+                  p.id !== selPart.id &&
+                  (p.type === 'gear' || p.type === 'pulley') &&
+                  Math.hypot(p.x - selPart.x, p.y - selPart.y) <= 8
               );
               if (concentric) {
                 return (
                   <div className="flex items-center justify-between p-2 bg-amber-50 dark:bg-amber-950/40 rounded-md border border-amber-200 dark:border-amber-900 text-xs">
                     <div className="flex flex-col">
                       <span className="font-semibold text-amber-700 dark:text-amber-300">
-                        Engrenagem Concêntrica
+                        Eixo Concêntrico Detectado
                       </span>
                       <span className="text-[10px] text-amber-600 dark:text-amber-400">
                         Alinhada ao centro da Peça {concentric.letter || 'B'}
@@ -669,6 +692,150 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
             <label className="flex items-center justify-between py-1 px-1 cursor-pointer">
               <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
                 Linha de Ação e Contatos
+              </span>
+              <input
+                type="checkbox"
+                checked={camera.showGearContacts !== false}
+                onChange={(e) => setCamera((c) => ({ ...c, showGearContacts: e.target.checked }))}
+                className="accent-blue-600 rounded"
+              />
+            </label>
+          </div>
+        ) : selPart.type === 'pulley' ? (
+          <div className="flex flex-col gap-2.5">
+            {(() => {
+              const diam = selPart.pulley?.diameter ?? selPart.w ?? 80;
+              const frictionPct = Math.round(getPartFriction(selPart) * 100);
+              const radius = diam / 2;
+              const perimeter = Math.PI * diam;
+
+              return (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex flex-col gap-1 col-span-2">
+                      <span className="text-[10px] text-slate-500 font-medium">Diâmetro da Polia (mm)</span>
+                      <input
+                        type="number"
+                        min="16"
+                        max="400"
+                        step="1"
+                        value={Math.round(diam * 10) / 10}
+                        onChange={(e) => {
+                          const d = Math.max(16, Math.min(400, parseFloat(e.target.value) || 16));
+                          updatePulley(selPart.id, { diameter: d });
+                        }}
+                        className="p-1.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none font-mono"
+                      />
+                    </label>
+                  </div>
+
+                  {/* Slider de Aderência / Atrito */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between items-center text-[10px]">
+                      <span className="text-slate-500 font-medium">Aderência / Atrito (μ)</span>
+                      <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">
+                        {frictionPct}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={frictionPct}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+                        updatePulley(selPart.id, { friction: val / 100 });
+                      }}
+                      className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none"
+                    />
+                  </div>
+
+                  {/* Dados Técnicos Calculados da Polia */}
+                  <div className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-md border border-slate-200 dark:border-slate-700/60 flex flex-col gap-1 text-[11px] font-mono text-slate-600 dark:text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Raio Nominal (R):</span>
+                      <span className="font-semibold text-blue-600 dark:text-blue-400">
+                        {radius.toFixed(1)} mm
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Perímetro (π·D):</span>
+                      <span>{perimeter.toFixed(1)} mm</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Transmissão:</span>
+                      <span>Por Atrito (Lisa)</span>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* Eixo Solidário (Composto) */}
+            {(() => {
+              const weldJoint = joints.find(
+                (j) => j.type === 'weld' && (j.part1Id === selPart.id || j.part2Id === selPart.id)
+              );
+              const partnerId = weldJoint ? (weldJoint.part1Id === selPart.id ? weldJoint.part2Id : weldJoint.part1Id) : null;
+              const partnerPart = partnerId ? parts.find((p) => p.id === partnerId) : null;
+
+              if (weldJoint && partnerPart) {
+                return (
+                  <div className="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-950/40 rounded-md border border-blue-200 dark:border-blue-900 text-xs">
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-blue-700 dark:text-blue-300">
+                        🔗 Eixo Composto (Solidária)
+                      </span>
+                      <span className="text-[10px] text-blue-600 dark:text-blue-400">
+                        Travada com Peça {partnerPart.letter || 'B'} — Giro 1:1
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => unlockCoaxialGears(selPart.id, partnerPart.id)}
+                      className="px-2 py-1 text-[10px] font-medium bg-white dark:bg-slate-800 text-rose-600 hover:bg-rose-50 rounded border border-rose-200 dark:border-rose-900/50 transition-colors"
+                      title="Destravar do mesmo eixo"
+                    >
+                      Destravar
+                    </button>
+                  </div>
+                );
+              }
+
+              const concentric = parts.find(
+                (p) =>
+                  p.id !== selPart.id &&
+                  (p.type === 'gear' || p.type === 'pulley') &&
+                  Math.hypot(p.x - selPart.x, p.y - selPart.y) <= 8
+              );
+              if (concentric) {
+                return (
+                  <div className="flex items-center justify-between p-2 bg-amber-50 dark:bg-amber-950/40 rounded-md border border-amber-200 dark:border-amber-900 text-xs">
+                    <div className="flex flex-col">
+                      <span className="font-semibold text-amber-700 dark:text-amber-300">
+                        Eixo Concêntrico Detectado
+                      </span>
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                        Alinhada ao centro da Peça {concentric.letter || 'B'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => lockCoaxialGears(selPart.id, concentric.id)}
+                      className="px-2 py-1 text-[10px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                    >
+                      Travar Eixo
+                    </button>
+                  </div>
+                );
+              }
+
+              return null;
+            })()}
+
+            {/* Toggle de Contatos por Atrito */}
+            <label className="flex items-center justify-between py-1 px-1 cursor-pointer">
+              <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium">
+                Indicadores de Contato por Atrito
               </span>
               <input
                 type="checkbox"
@@ -821,7 +988,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ store }) => {
 
       {/* Aparência & Estilo */}
       <AppearanceSection
-        title={selPart.type === 'gear' ? 'Estilo da Engrenagem' : 'Aparência & Estilo'}
+        title={
+          selPart.type === 'gear'
+            ? 'Estilo da Engrenagem'
+            : selPart.type === 'pulley'
+            ? 'Estilo da Polia'
+            : 'Aparência & Estilo'
+        }
         style={selPart.style}
         defaultStroke={selPart.color || '#2563eb'}
         defaultFill={selPart.color || '#2563eb'}

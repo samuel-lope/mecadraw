@@ -9,11 +9,13 @@ import {
   Part,
   PartSlot,
   Pivot,
+  PulleyData,
   SelectionState,
   TelemetrySample,
   ToolType,
   TrailPoint,
 } from '../types/mechanism';
+import { getRotaryRadius } from '../engine/pulleyGeometry';
 import {
   analyzeMechanism,
   createSimulation,
@@ -666,9 +668,14 @@ export const useMechanismStore = () => {
           if (j.part1Id === partId || j.part2Id === partId) {
             const p1 = parts.find((p) => p.id === j.part1Id);
             const p2 = parts.find((p) => p.id === j.part2Id);
-            const z1 = j.part1Id === partId ? (typeof updater === 'function' ? updater(p1!.gear!).teeth : updater.teeth || p1!.gear!.teeth) : p1?.gear?.teeth || 20;
-            const z2 = j.part2Id === partId ? (typeof updater === 'function' ? updater(p2!.gear!).teeth : updater.teeth || p2!.gear!.teeth) : p2?.gear?.teeth || 20;
-            return { ...j, gearRatio: z1 / z2 };
+            if (!p1 || !p2) return j;
+            const g1 = j.part1Id === partId && p1.gear ? (typeof updater === 'function' ? updater(p1.gear) : { ...p1.gear, ...updater }) : p1.gear;
+            const g2 = j.part2Id === partId && p2.gear ? (typeof updater === 'function' ? updater(p2.gear) : { ...p2.gear, ...updater }) : p2.gear;
+            const r1 = getRotaryRadius(g1 ? { ...p1, gear: g1 } : p1);
+            const r2 = getRotaryRadius(g2 ? { ...p2, gear: g2 } : p2);
+            if (r1 && r2) {
+              return { ...j, gearRatio: r1 / r2 };
+            }
           }
           return j;
         })
@@ -678,6 +685,100 @@ export const useMechanismStore = () => {
       setSimLockedUp(false);
     },
     [parts, joints, recordSnapshot]
+  );
+
+  const addPulleyPart = useCallback(
+    (x: number, y: number, diameter = 80) => {
+      recordSnapshot();
+      const diam = Math.max(16, Math.min(400, diameter));
+      const newPartId = Date.now() + Math.floor(Math.random() * 1000);
+      const centerPivotId = newPartId + 1;
+
+      const newPulley: Part = {
+        id: newPartId,
+        name: `Polia Ø${Math.round(diam)}`,
+        type: 'pulley',
+        x,
+        y,
+        rot: 0,
+        w: diam,
+        h: diam,
+        pulley: {
+          diameter: diam,
+          friction: 1.0,
+          spokes: 4,
+        },
+        pivots: [
+          {
+            id: centerPivotId,
+            label: '1',
+            lx: 0,
+            ly: 0,
+            fixed: true, // Eixo central fixo ao terra por padrão (como engrenagem)
+          },
+        ],
+      };
+
+      setParts((prev) => syncPartsAndPivots([...prev, newPulley]));
+      setSelection({ partId: newPartId });
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
+    },
+    [recordSnapshot]
+  );
+
+  const updatePulley = useCallback(
+    (partId: number, updater: Partial<PulleyData> | ((pl: PulleyData) => PulleyData)) => {
+      recordSnapshot();
+      setParts((prev) => {
+        const target = prev.find((p) => p.id === partId);
+        if (!target || target.type !== 'pulley') return prev;
+
+        const basePulley: PulleyData = target.pulley || { diameter: target.w || 80, friction: 1.0, spokes: 4 };
+        const updatedPulley = typeof updater === 'function' ? updater(basePulley) : { ...basePulley, ...updater };
+        const diam = Math.max(16, Math.min(400, updatedPulley.diameter));
+
+        const updatedTarget: Part = {
+          ...target,
+          pulley: { ...updatedPulley, diameter: diam },
+          w: diam,
+          h: diam,
+          name: `Polia Ø${Math.round(diam)}`,
+        };
+
+        return prev.map((p) => (p.id === partId ? updatedTarget : p));
+      });
+
+      setJoints((prev) =>
+        prev.map((j) => {
+          if ((j.type !== 'gear' && j.type !== 'belt') || !j.part1Id || !j.part2Id) return j;
+          if (j.part1Id === partId || j.part2Id === partId) {
+            const p1 = parts.find((p) => p.id === j.part1Id);
+            const p2 = parts.find((p) => p.id === j.part2Id);
+            if (!p1 || !p2) return j;
+            const applyPatch = (p: Part): Part => {
+              if (p.id !== partId) return p;
+              const base: PulleyData = p.pulley || { diameter: p.w || 80, friction: 1.0, spokes: 4 };
+              const next = typeof updater === 'function' ? updater(base) : { ...base, ...updater };
+              const diam = Math.max(16, Math.min(400, next.diameter));
+              return { ...p, pulley: { ...next, diameter: diam }, w: diam, h: diam };
+            };
+            const r1 = getRotaryRadius(applyPatch(p1));
+            const r2 = getRotaryRadius(applyPatch(p2));
+            if (r1 && r2) {
+              return { ...j, gearRatio: r1 / r2 };
+            }
+          }
+          return j;
+        })
+      );
+
+      simInstanceRef.current = null;
+      simSnapshotRef.current = null;
+      setSimLockedUp(false);
+    },
+    [parts, recordSnapshot]
   );
 
   const connectGears = useCallback(
@@ -814,28 +915,28 @@ export const useMechanismStore = () => {
       if (part1Id === part2Id) return;
       const p1 = parts.find((p) => p.id === part1Id);
       const p2 = parts.find((p) => p.id === part2Id);
-      if (!p1?.gear || !p2?.gear) return;
+      if (!p1 || !p2) return;
+      const r1 = getRotaryRadius(p1);
+      let r2 = getRotaryRadius(p2);
+      if (r1 === null || r2 === null) return;
 
       recordSnapshot();
 
-      // Sincronizar módulo métrico da polia 2 se diferente para garantir engrazamento dos dentes da correia
-      if (p2.gear.module !== p1.gear.module) {
+      // Sincronizar módulo métrico apenas se ambas forem engrenagens dentadas com módulos diferentes
+      if (p1.type === 'gear' && p2.type === 'gear' && p1.gear && p2.gear && p2.gear.module !== p1.gear.module) {
+        const newGear = { ...p2.gear, module: p1.gear.module };
+        const r = calculateGearRadii(newGear.teeth, newGear.module);
+        r2 = r.pitch;
         setParts((prev) =>
-          prev.map((p) => {
-            if (p.id !== part2Id || !p.gear) return p;
-            const newGear = { ...p.gear, module: p1.gear!.module };
-            const r = calculateGearRadii(newGear.teeth, newGear.module);
-            return {
-              ...p,
-              gear: newGear,
-              w: r.addendum * 2,
-              h: r.addendum * 2,
-            };
-          })
+          prev.map((p) =>
+            p.id === part2Id
+              ? { ...p, gear: newGear, w: r.addendum * 2, h: r.addendum * 2 }
+              : p
+          )
         );
       }
 
-      const ratio = p1.gear.teeth / p2.gear.teeth;
+      const ratio = r1 / r2;
       const newJoint: Joint = {
         id: Date.now() + Math.floor(Math.random() * 1000),
         p1: p1.pivots[0]?.id || 0,
@@ -1234,6 +1335,8 @@ export const useMechanismStore = () => {
     connectPinToSlot,
     addGearPart,
     updateGear,
+    addPulleyPart,
+    updatePulley,
     connectGears,
     connectBelt,
     lockCoaxialGears,

@@ -1,5 +1,5 @@
 import { Part, Point2D } from '../types/mechanism';
-import { calculateGearRadii } from './gearGeometry';
+import { closestPointOnSegment, getRotaryRadius } from './pulleyGeometry';
 
 export interface BeltGeometryData {
   gear1Id: number;
@@ -8,7 +8,8 @@ export interface BeltGeometryData {
   c2: Point2D;
   r1: number; // Raio primitivo Polia 1
   r2: number; // Raio primitivo Polia 2
-  m: number;  // Módulo das engrenagens
+  m: number;  // Módulo das engrenagens (quando aplicável)
+  hasTeeth: boolean; // True se ao menos uma das peças for engrenagem dentada
   d: number;  // Distância entre centros (mm)
   thetaC: number; // Ângulo da linha de centros C1 -> C2
   phi: number;    // Ângulo de tangência acos((r1 - r2) / d)
@@ -25,27 +26,28 @@ export interface BeltGeometryData {
   totalLength: number;// Comprimento primitivo total L (mm)
   teethCount: number; // Quantidade inteira estimada de dentes
   pitch: number;      // Passo circular p = π · m (mm)
-  ratio: number;      // Relação de transmissão z1 / z2
+  ratio: number;      // Relação de transmissão r1 / r2
 }
 
 /**
- * Calcula a geometria analítica completa de uma correia dentada aberta entre duas engrenagens
+ * Calcula a geometria analítica completa de uma correia aberta entre duas polias e/ou engrenagens
  */
 export const calculateBeltGeometry = (
   gear1: Part,
   gear2: Part
 ): BeltGeometryData | null => {
-  if (!gear1.gear || !gear2.gear) return null;
+  const r1 = getRotaryRadius(gear1);
+  const r2 = getRotaryRadius(gear2);
+  if (r1 === null || r2 === null) return null;
 
-  const m = gear1.gear.module;
-  const r1 = calculateGearRadii(gear1.gear.teeth, m).pitch;
-  const r2 = calculateGearRadii(gear2.gear.teeth, gear2.gear.module).pitch;
+  const hasTeeth = gear1.type === 'gear' || gear2.type === 'gear';
+  const m = gear1.gear?.module ?? gear2.gear?.module ?? 4;
 
   const dx = gear2.x - gear1.x;
   const dy = gear2.y - gear1.y;
   const d = Math.hypot(dx, dy);
 
-  // Distância mínima: as engrenagens não podem estar uma dentro da outra
+  // Distância mínima: as polias/engrenagens não podem estar uma dentro da outra
   if (d <= Math.abs(r2 - r1) + 2) return null;
 
   const thetaC = Math.atan2(dy, dx);
@@ -84,7 +86,7 @@ export const calculateBeltGeometry = (
 
   const pitch = Math.PI * m;
   const teethCount = Math.max(1, Math.round(totalLength / pitch));
-  const ratio = gear1.gear.teeth / gear2.gear.teeth;
+  const ratio = r1 / r2;
 
   return {
     gear1Id: gear1.id,
@@ -94,6 +96,7 @@ export const calculateBeltGeometry = (
     r1,
     r2,
     m,
+    hasTeeth,
     d,
     thetaC,
     phi,
@@ -184,52 +187,97 @@ export const getBeltPointAtDistance = (
   return { x, y, angle: tangentAng, nx, ny };
 };
 
+export interface BeltClosestPoint {
+  point: Point2D;
+  dist: number;
+  clockwiseTangent: Point2D; // Vetor unitário tangente quando G1/G2 giram no sentido horário (rot crescente)
+  segment: 'span-u' | 'span-l' | 'arc-1' | 'arc-2';
+}
+
 /**
- * Distância mínima de um ponto a um segmento de reta
+ * Encontra o ponto mais próximo ao longo de todo o perímetro da correia (ramos retos e arcos)
+ * e retorna o vetor tangente unitário compatível com rotação horária positiva.
  */
-const distPointToSegment = (
-  p: Point2D,
-  a: Point2D,
-  b: Point2D
-): number => {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const projX = a.x + t * dx;
-  const projY = a.y + t * dy;
-  return Math.hypot(p.x - projX, p.y - projY);
+export const closestPointOnBelt = (
+  pt: Point2D,
+  geom: BeltGeometryData
+): BeltClosestPoint => {
+  // 1. Ramo u (t1a -> t2a): deslocamento horário vai de t2a para t1a
+  const segU = closestPointOnSegment(pt, geom.t1a, geom.t2a);
+  const ux = geom.t1a.x - geom.t2a.x;
+  const uy = geom.t1a.y - geom.t2a.y;
+  const uLen = Math.hypot(ux, uy) || 1;
+  let best: BeltClosestPoint = {
+    point: segU.point,
+    dist: segU.dist,
+    clockwiseTangent: { x: ux / uLen, y: uy / uLen },
+    segment: 'span-u',
+  };
+
+  // 2. Ramo l (t1b -> t2b): deslocamento horário vai de t1b para t2b
+  const segL = closestPointOnSegment(pt, geom.t1b, geom.t2b);
+  if (segL.dist < best.dist) {
+    const lx = geom.t2b.x - geom.t1b.x;
+    const ly = geom.t2b.y - geom.t1b.y;
+    const lLen = Math.hypot(lx, ly) || 1;
+    best = {
+      point: segL.point,
+      dist: segL.dist,
+      clockwiseTangent: { x: lx / lLen, y: ly / lLen },
+      segment: 'span-l',
+    };
+  }
+
+  // 3. Arco exterior na Polia 1
+  const ang1 = Math.atan2(pt.y - geom.c1.y, pt.x - geom.c1.x);
+  const relAng1 = Math.atan2(
+    Math.sin(ang1 - (geom.thetaC + Math.PI)),
+    Math.cos(ang1 - (geom.thetaC + Math.PI))
+  );
+  if (Math.abs(relAng1) <= Math.PI - geom.phi) {
+    const px = geom.c1.x + geom.r1 * Math.cos(ang1);
+    const py = geom.c1.y + geom.r1 * Math.sin(ang1);
+    const dist1 = Math.hypot(pt.x - px, pt.y - py);
+    if (dist1 < best.dist) {
+      best = {
+        point: { x: px, y: py },
+        dist: dist1,
+        clockwiseTangent: { x: -Math.sin(ang1), y: Math.cos(ang1) },
+        segment: 'arc-1',
+      };
+    }
+  }
+
+  // 4. Arco exterior na Polia 2
+  const ang2 = Math.atan2(pt.y - geom.c2.y, pt.x - geom.c2.x);
+  const relAng2 = Math.atan2(
+    Math.sin(ang2 - geom.thetaC),
+    Math.cos(ang2 - geom.thetaC)
+  );
+  if (Math.abs(relAng2) <= geom.phi) {
+    const px = geom.c2.x + geom.r2 * Math.cos(ang2);
+    const py = geom.c2.y + geom.r2 * Math.sin(ang2);
+    const dist2 = Math.hypot(pt.x - px, pt.y - py);
+    if (dist2 < best.dist) {
+      best = {
+        point: { x: px, y: py },
+        dist: dist2,
+        clockwiseTangent: { x: -Math.sin(ang2), y: Math.cos(ang2) },
+        segment: 'arc-2',
+      };
+    }
+  }
+
+  return best;
 };
 
 /**
- * Hit testing para seleção de uma correia dentada
+ * Hit testing para seleção de uma correia
  */
 export const hitBelt = (
   pt: Point2D,
   geom: BeltGeometryData,
   tolerance = 8
 ): boolean => {
-  // Testar proximidade dos dois ramos retos
-  if (distPointToSegment(pt, geom.t1a, geom.t2a) <= tolerance) return true;
-  if (distPointToSegment(pt, geom.t2b, geom.t1b) <= tolerance) return true;
-
-  // Testar proximidade do arco da Polia 1 (lado exterior, oposto a C2)
-  const d1 = Math.hypot(pt.x - geom.c1.x, pt.y - geom.c1.y);
-  if (Math.abs(d1 - geom.r1) <= tolerance) {
-    const ang = Math.atan2(pt.y - geom.c1.y, pt.x - geom.c1.x);
-    const relAng = Math.atan2(Math.sin(ang - (geom.thetaC + Math.PI)), Math.cos(ang - (geom.thetaC + Math.PI)));
-    if (Math.abs(relAng) <= Math.PI - geom.phi) return true;
-  }
-
-  // Testar proximidade do arco da Polia 2 (lado exterior, no sentido de C2)
-  const d2 = Math.hypot(pt.x - geom.c2.x, pt.y - geom.c2.y);
-  if (Math.abs(d2 - geom.r2) <= tolerance) {
-    const ang = Math.atan2(pt.y - geom.c2.y, pt.x - geom.c2.x);
-    const relAng = Math.atan2(Math.sin(ang - geom.thetaC), Math.cos(ang - geom.thetaC));
-    if (Math.abs(relAng) <= geom.phi) return true;
-  }
-
-  return false;
+  return closestPointOnBelt(pt, geom).dist <= tolerance;
 };

@@ -38,6 +38,19 @@ const TOOLS: ToolDef[] = [
   { id: 'tri', label: 'Triângulo', icon: <Triangle className="w-4 h-4" />, shortcut: 'T' },
   { id: 'gear', label: 'Engrenagem', icon: <Settings className="w-4 h-4" />, shortcut: 'E' },
   {
+    id: 'pulley',
+    label: 'Polia',
+    icon: (
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="6" strokeDasharray="2 2" />
+        <circle cx="12" cy="12" r="2" />
+        <path d="M12 6v4M12 14v4M6 12h4M14 12h4" />
+      </svg>
+    ),
+    shortcut: 'O',
+  },
+  {
     id: 'belt',
     label: 'Correia',
     icon: (
@@ -64,12 +77,12 @@ export const ToolPalette: React.FC<ToolPaletteProps> = ({ store }) => {
 
   return (
     <aside className="w-16 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col items-center py-2 gap-1 select-none z-10 shrink-0">
-      {TOOLS.map((t, idx) => {
+      {TOOLS.map((t) => {
         const isCurrent = tool === t.id;
 
         return (
           <React.Fragment key={t.id}>
-            {idx === 8 && <div className="w-8 h-px bg-slate-200 dark:bg-slate-800 my-1" />}
+            {t.id === 'axis' && <div className="w-8 h-px bg-slate-200 dark:bg-slate-800 my-1" />}
             <button
               onClick={() => setTool(t.id)}
               className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-all text-xs relative ${
